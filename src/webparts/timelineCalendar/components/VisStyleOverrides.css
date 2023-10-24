@@ -1,0 +1,130 @@
+/* Just for dev/building within workbench to stretch it out */
+#workbenchPageContent { /* class at one point i_a_8474018e */
+    max-width: 100% !important;
+}
+
+/* Increase font for PnP & SP prop field descriptions */
+div.spPropertyPaneContainer div.ms-CustomFieldHost span > span.ms-TextField-description,
+div.spPropertyPaneContainer div.ms-TextField span > span.ms-TextField-description {
+    font-size:11px;
+}
+
+/* Force text input field for placeholder="Site URL" to have min-width */
+.ms-Panel-main > .ms-Panel-contentInner .ms-Panel-content div.PropertyFieldCollectionData__panel__table > 
+	div.PropertyFieldCollectionData__panel__table-row div.ms-TextField 
+		input.ms-TextField-field.PropertyFieldCollectionData__panel__string-field {
+	min-width:130px
+}
+
+/* ---------------------- */
+/* Custom classes		  */
+/* ---------------------- */
+.legendBox, .bottomGroupsBar .vis-item {
+	min-width:50px;
+	text-align:center;
+	font-size:0.85em;
+	margin: 0px 5px 5px 0;
+	font-weight:bold;
+	position:static;
+	padding:2px 4px;
+  	user-select:none; /* Prevent "text input" line/cursor from appearing after clicked */
+	line-height:1.2; /* Needed to override property pane FieldCollectionData tableRow  */
+}
+
+.vis-item.legendBox.vis-range.gray {
+	background-color:rgb(204, 204, 204);
+	border-color:rgb(204, 204, 204);
+	color:#999;
+}
+
+.bottomGroupsBar .vis-item.vis-range {
+	border-color:#bfbfbf;
+	background-color:black;
+	color:white;
+	border-width:1px;
+}
+
+.bottomGroupsBar {
+	display:none;
+	background-color:white;
+	/*padding-left:8px;
+	position: fixed;
+	left: 0px;
+	width:98%;
+	bottom: 0px;
+	z-index:1;*/
+	margin-top:10px;
+}
+
+/* ---------------------- */
+/* Vis Library Overwrites */
+/* ---------------------- */
+.vis-timeline {
+	/* Default is hidden but it causes tooltips to not fully show when the Timeline isn't tall enough */
+	overflow: visible;
+}
+
+/* Year & "full month name" in horizonal axis */
+.vis-timeline .vis-time-axis .vis-major {
+font-weight: 700;
+}
+  
+/* Make "group row" label appear clickable */
+.vis-labelset .vis-label {
+    cursor: pointer;
+}
+
+/* For all event items */
+.vis-item {
+    cursor: pointer;
+}
+
+/* For backgrond items (weekend and holidays) keep cursor default
+.vis-background .vis-item {
+	cursor:default;
+} */
+
+.vis-item.weekend {
+	background-color: rgb(235, 235, 235);
+	border-color:rgb(235, 235, 235);
+}
+.vis-item.weekend .vis-item-overflow{
+	display:none;
+}
+
+/* Correct the background on *points* instead of showing the color which was "hiding" the point icon */
+/* Color prop needed for some points that used light text on dark background which would hide the text */
+.vis-timeline .vis-item.vis-point {
+	background-color:transparent;
+	color:inherit;
+}
+
+/* Make horizontal group lines appear over weekend & holiday events */
+.vis-item.vis-background {
+	z-index:0;
+}
+ 
+.vis-item.vis-range {
+	z-index:1;
+}
+
+/* Change the default tooltip */
+div.vis-tooltip {
+	margin:5px;
+	border-color: rgb(241, 208, 49);
+	background-color: rgb(255, 255, 163);
+	font-family: inherit;
+	font-size: .9em;
+	color: rgb(85, 85, 85);
+	padding:0px;
+	white-space: normal;
+	max-width: 500px;
+}
+div.vis-tooltipTitle {
+	padding:5px;
+	background-color:rgb(255, 239, 147);
+	font-weight: 700;
+}
+div.vis-tooltipBody {
+	padding: 2px 5px 5px 5px;
+}

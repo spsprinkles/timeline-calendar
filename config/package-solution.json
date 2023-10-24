@@ -1,0 +1,41 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "Timeline Calendar",
+    "id": "fdcba3a4-d4a6-4ac7-a370-98c7d5d8e7db",
+    "version": "0.5.2.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "iconPath": "solution/images/AppIcon.png",
+    "developer": {
+      "name": "Michael Vasiloff",
+      "websiteUrl": "https://github.com/spsprinkles/timeline-calendar/",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": ""
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "Create a dynamic, filterable timeline that can pull in data from multiple sources."
+      },
+      "longDescription": {
+        "default": "Use the Timeline Calendar web part to pull in data from multiple sources and render them together in a dynamic, filterable timeline view. Options are available to easily adjust how the timeline behaves and there is support for making advanced configuration changes to refine the look and behavior of the timeline."
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "timeline-calendar Feature",
+        "description": "The feature that activates elements of the timeline-calendar solution.",
+        "id": "ab611fa5-0740-4d5f-8cf4-fdd0ab5fcdfa",
+        "version": "1.0.0.0"
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/timeline-calendar.sppkg"
+  }
+}
