@@ -7,7 +7,7 @@
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
-    "iconPath": "solution/images/AppIcon.png",
+    "iconPath": "images/AppIcon.png",
     "developer": {
       "name": "Michael Vasiloff",
       "websiteUrl": "https://github.com/spsprinkles/timeline-calendar/",
