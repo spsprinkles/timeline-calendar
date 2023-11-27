@@ -46,6 +46,20 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     //const { data, calendars } = this.props;
     this.initialBuildTimeline();
 
+    //Add a helper for when user mistypes a helper name so that an exception is not thrown
+    Handlebars.registerHelper('helperMissing', function( /* dynamic arguments */) {
+      if (arguments.length == 1) {
+        //This is actually just a field property *without* a value; no "helper" was specified
+        return "";
+      }
+      else {
+        //The handler name used doesn't exist
+        const options = arguments[arguments.length-1];
+        //const args = Array.prototype.slice.call(arguments, 0, arguments.length-1);
+        return new Handlebars.SafeString('Missing handler: "' + options.name + '"');
+      }
+    });
+    
     Handlebars.registerHelper("limit", strText => {
       if (strText == null)
         return "";
@@ -90,6 +104,17 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         return dateStr;
       }
     });
+
+    Handlebars.registerHelper("yesNo", strText => {
+      if (strText == null)
+        return "";
+      else {
+        if (strText == "1")
+          return "Yes";
+        else
+          return "No";
+      }
+    });
   }
 
   /**
@@ -108,7 +133,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //Check if there were no groups but now new ones were added; need to tag existing events to a group or they won't show
       if ((prevProps.groups == null || prevProps.groups.length == 0) && (this.props.groups && this.props.groups.length > 0)) { // && this.props.lists
         const groupId = (this.props.groups[0] as IGroupItem).uniqueId;
-        var itemEvents = this._dsItems.get({ //get all events (except for "weekends")
+        const itemEvents = this._dsItems.get({ //get all events (except for "weekends")
           filter: function (item:any) {
             if (item.className != "weekend") {
               item.group = groupId;
@@ -124,7 +149,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       reloadEvents = false;
       const groupId = (self.props.groups == null ? null : (self.props.groups[0] as IGroupItem).uniqueId);
       //Update existing, applicable events type to "background"
-      var itemEvents = this._dsItems.get({
+      const itemEvents = this._dsItems.get({
         filter: function (item:any) {
           if (prevProps.holidayCategories != null && prevProps.holidayCategories != "" && item.className == self.ensureValidClassName(prevProps.holidayCategories)) {
             item.type = "range"; //assume it should be reverted to range (vs. point)
@@ -168,10 +193,11 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     }
     else if (prevProps.singleDayAsPoint != this.props.singleDayAsPoint) {
       //Update events
-      var itemEvents = this._dsItems.get({
+      const itemEvents = this._dsItems.get({
         filter: (item:any) => {
           if (item.type != "background") { //ignore weekend and special holiday events
-            if (this.props.singleDayAsPoint && (item.end == null || item.start.toISOString().substring(0, 10) == item.end.toISOString().substring(0, 10)))
+            //Was checking (item.start.toISOString().substring(0, 10) == item.end.toISOString().substring(0, 10)), but the ISO time zone threw off some events
+            if (this.props.singleDayAsPoint && (item.end == null || item.start.toLocaleDateString() == item.end.toLocaleDateString())) //localDate == "11/27/2023"
               item.type = "point";
             else
               item.type = "range";
@@ -191,6 +217,13 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     }
     else if (prevProps.overflowTextVisible != this.props.overflowTextVisible) {
       this.renderDynamicStyles();
+      if (this.props.overflowTextVisible) {
+        this._timeline.redraw(); //This alone doesn't fix issue with overlapping event text
+        //Need to "move" the timeline window to force a redraw
+        let tcWin = this._timeline.getWindow();
+        tcWin.end.setSeconds(tcWin.end.getSeconds() + 1);
+        this._timeline.setWindow(tcWin.start, tcWin.end);
+      }
       return;
     }
     // else if (prevProps.hideSocialBar != this.props.hideSocialBar) {
@@ -199,6 +232,16 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     // }
     else if (prevProps.tooltipEditor != this.props.tooltipEditor) {
       //No need to overwrite this._timeline.setOptions because tooltip.template is already a dynamic function
+      //Get original "field keys"
+      const prevFieldKeys = this.getFieldKeys(prevProps.tooltipEditor);
+      const newFieldKeys = this.getFieldKeys();
+      //See if they are different (fields added for example)
+      prevFieldKeys.sort();
+      newFieldKeys.sort();
+      if (JSON.stringify(prevFieldKeys) != JSON.stringify(newFieldKeys)) {
+        //Query the lists again to get potentially new field data
+        this.renderEvents();
+      }
       return;
     }
     else if (prevProps.visJsonProperties != this.props.visJsonProperties) {
@@ -423,7 +466,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     startingIndex = startingIndex || 0;
     let foundGroupId;
 
-    var groups = this._dsGroups.get({
+    const groups = this._dsGroups.get({
       order: "order",
       filter: function (item:any) {
         return (item.visible != false);
@@ -463,18 +506,19 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     this._dsItems = new DataSet();
     this._timeline = new Timeline(container, this._dsItems, this.options);
     
-    // window.TC = { //temp
-    //   timeline: this._timeline,
-    //   eventsDataSet: this._dsItems,
-    //   groupsDataSet: this._dsGroups
-    // }
+    //@ts-ignore
+    window.TC = { //temp
+       timeline: this._timeline,
+       eventsDataSet: this._dsItems,
+       groupsDataSet: this._dsGroups
+    }
 
     //Add click handler for events
     this._timeline.on("select", (props) => {
       if (props.items.length > 0 && props.event.type == "tap") { //ignore the follow-on "press" event (still needed?)
 				const oEvent = this._dsItems.get(props.items[0]);
         if (oEvent.encodedAbsUrl) {
-					var itemUrl = oEvent.encodedAbsUrl.substring(0, oEvent.encodedAbsUrl.lastIndexOf("/")); //cut off the ending: "/ID#_.000"
+					const itemUrl = oEvent.encodedAbsUrl.substring(0, oEvent.encodedAbsUrl.lastIndexOf("/")); //cut off the ending: "/ID#_.000"
           //OpenPopUpPage(itemUrl + "/DispForm.aspx?ID=" + oEvent.spId, function(result) {
 					// 	if (result == 0 || oEvent.spId.toString().contains("T")) //Edits to series/recurring events with IDs like "16.0.2020-06-08T16:00:00Z" actually have a different ID generated by the SP form action
 					// 		return;
@@ -539,7 +583,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //Find the selected group
       const foundGroupId = this.getGroupIdAtIndex(elemIndex);
       //Hide the selected group
-      var theGroup = this._dsGroups.get(foundGroupId);
+      const theGroup = this._dsGroups.get(foundGroupId);
       this._dsGroups.updateOnly({id: theGroup.id, visible:false});
       
       //Show the bar
@@ -560,7 +604,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         e.preventDefault(); //stop the normal menu from appearing
 
         //Is this the only group currently being shown?
-        var shownGroups = this._dsGroups.get({
+        const shownGroups = this._dsGroups.get({
           filter: function (group:any) {
             return (group.visible != false);
           }
@@ -581,7 +625,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         const foundGroupId = this.getGroupIdAtIndex(elemIndex);
 
         //Get groups to remove
-        var groupsToRemove = this._dsGroups.get({
+        const groupsToRemove = this._dsGroups.get({
           filter: function (group:any) {
             return (group.id != foundGroupId && group.visible != false);
           }
@@ -620,7 +664,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 
     //Function: processBottomBarItem
     const processBottomBarItem = (elem:HTMLElement):any => {
-      var groupToAdd = JSON.parse(elem.dataset.groupObj);
+      const groupToAdd = JSON.parse(elem.dataset.groupObj);
       //Remove the group box from inside the bottomGroupsBar
       elem.remove();
       
@@ -632,24 +676,25 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 
     //Add weekend items
     if (true) {//this.props.shadeWeekends) {
+      let weekendStart = null as Date;
       if (this.options.min.getDay() == 0) { //0 = Sunday
         //Need to set weekend one day before
-        var weekendStart = new Date(this.options.min.getFullYear(), this.options.min.getMonth(), this.options.min.getDate() - 1);
+        weekendStart = new Date(this.options.min.getFullYear(), this.options.min.getMonth(), this.options.min.getDate() - 1);
       }
       else if (this.options.min.getDay() == 6) { //6 = Saturday
-        var weekendStart = new Date(this.options.min.valueOf());
+        weekendStart = new Date(this.options.min.valueOf());
       }
       else {
         //Add days to get to Saturday
-        var daysToAdd = 6 - this.options.min.getDay();
-        var weekendStart = new Date(this.options.min.getFullYear(), this.options.min.getMonth(), this.options.min.getDate() + daysToAdd);
+        const daysToAdd = 6 - this.options.min.getDay();
+        weekendStart = new Date(this.options.min.getFullYear(), this.options.min.getMonth(), this.options.min.getDate() + daysToAdd);
       }
       //Add two days but remove 1 second to get at the very end of the previous day
-      var weekendEnd = new Date(weekendStart.getFullYear(), weekendStart.getMonth(), weekendStart.getDate()+2, 0, 0, -1);
+      let weekendEnd = new Date(weekendStart.getFullYear(), weekendStart.getMonth(), weekendStart.getDate()+2, 0, 0, -1);
       
       //Generate all weekends
       while (weekendStart < this.options.max) {
-        var oEvent = {
+        const oEvent = {
           id: IdSvc.getNext(),
           content: "",
           start: weekendStart,
@@ -823,8 +868,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           this._dsItems.add(JSON.parse((el as HTMLElement).dataset.events));
         }
         else { //Hide data
-          var className = (el as HTMLElement).dataset.className;//getAttribute("data-className");
-          var itemEvents = this._dsItems.get({
+          const className = (el as HTMLElement).dataset.className;//getAttribute("data-className");
+          const itemEvents = this._dsItems.get({
             filter: function (item:any) {
               //return (item.className == className);
               //Handle multiple classes such as "Meeting Pending"
@@ -938,8 +983,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //Only for lists that have View specified
       if (list.view !== null && list.view.trim() !== "") {
         //Build list filter, first assume a title then check if GUID
-        var listFilter = "lists/getByTitle('" + list.list + "')";
-        var guidRegex = /[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}/i;
+        let listFilter = "lists/getByTitle('" + list.list + "')";
+        const guidRegex = /[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}/i;
         if (guidRegex.test(list.list))
           listFilter = "lists(guid'" + guidRegex.exec(list.list)[0] + "')";
         
@@ -955,10 +1000,10 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 								//cal.viewFilter = view.ViewQuery.replace("<Month />", "<Year />");
 								
 								//Extract just the CAML filter portion
-								var droIndex = view.ViewQuery.indexOf('</DateRangesOverlap>');
-								var endIndex = view.ViewQuery.lastIndexOf('</And></Where>');
-								var whereStartIndex = view.ViewQuery.indexOf('<Where>');
-								var whereEndIndex = view.ViewQuery.lastIndexOf('</Where>');
+								const droIndex = view.ViewQuery.indexOf('</DateRangesOverlap>');
+								const endIndex = view.ViewQuery.lastIndexOf('</And></Where>');
+								const whereStartIndex = view.ViewQuery.indexOf('<Where>');
+								const whereEndIndex = view.ViewQuery.lastIndexOf('</Where>');
 								//Look for Calendar & Standard w/ Recurrence views (they have <DateRangesOverlap>)) //or add view.ViewType: "CALENDAR"
 								if (droIndex > -1 && endIndex > -1)
 									list.viewFilter = view.ViewQuery.substring(droIndex+20, endIndex);
@@ -984,18 +1029,19 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     }))
   }
 
-  private getFieldKeys():string[] {
+  private getFieldKeys(input?:string):string[] {
     let fieldKeys = [] as string[];
-    if (this.props.tooltipEditor) {
+    let source = (input || this.props.tooltipEditor);
+    if (source) {
       //Extract the {{property}} references
-      fieldKeys = this.props.tooltipEditor.match(/{{(.*?)}}/g);
+      fieldKeys = source.match(/{{(.*?)}}/g);
       if (fieldKeys) {
         //Remove the vis.js "default" fields
         fieldKeys = fieldKeys.filter(i => {
           if (i != "{{content}}" && i != "{{start}}" && i != "{{end}}")
               return i;
         });
-        //Extract just the "property" text from inside the {{ }} or {{{ }}}
+        //Extract just the field/"property" text from inside the {{ }} or {{{ }}}
         for (let i=0; i < fieldKeys.length; i++) {
             const matchResults = fieldKeys[i].match(/\w+/g);
             if (matchResults.length == 1)
@@ -1184,6 +1230,74 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     return returnVal;
   }
 
+  private handleMultiValues(fieldValue:string): string[] {
+    //Check for multiple value fields (single value fields work fine and result in ["Single value"] array)
+    let fieldSplit = fieldValue.split(";#");
+
+    /* NOTE: Field values can have special formatting for some fields...
+    Calculated field:
+    string;#Custom title
+
+    Multi-Choice field:
+    ;#Division Event;# (when a single value selected)
+    ;#Division Event;#Family Event;# (when multiple values selected)
+
+    Lookup & Person & Managed Metadata fields:
+    1;#Some test item
+    9;#VASILOFF, MICHAEL D CTR USAF USAFE USAFE CS/CSK
+
+    Multi-Lookup & Multi-Person & Multi-Managed Metadata fields
+    9;#VASILOFF, MICHAEL D CTR USAF USAFE USAFE CS/CSK
+    8;#SharePoint Online;#9;#OneDrive
+    27;#HILLMAN, MATTHEW G CTR USAF USAFE USAFE-AFAFRICA/CSK;#9;#VASILOFF, MICHAEL D CTR USAF USAFE USAFE CS/CSK
+
+    "Regular" values without ;# result in ["Single value"] array
+    */
+
+    //Look for Calculated fields first (since the value left of ;# isn't a "real" value within the .split)
+    if (fieldSplit.length == 2 && isNaN(Number(fieldSplit[0]))) {
+      //Remove the first value from the array (leaving a single entry array)
+      fieldSplit.shift();
+    }
+    
+    //Check for multiple-value fields 
+    //Remove potential blank entries in split (from multi-choice fields)
+    fieldSplit = fieldSplit.filter(i => {return i});
+
+    //A single value was found (either a "regular" value or from a Calculated field or a multi-choice field)
+    if (fieldSplit.length == 1) {
+      //groupFieldValue = groupSplit[0];
+      return fieldSplit;
+    }
+    
+    //Check for *single* value lookup/person/managed metadata field (has a number in the 0 index)
+    // if (groupSplit.length == 2 && !isNaN(Number(groupSplit[0]))) {
+    //   groupFieldValue = groupSplit[1];
+    // }
+    // else {
+    {
+      //More than one, *real* value is in the field
+      //Look for Multi-Lookup & Multi-Person & Multi-Managed Metadata fields where the even index is an integer
+      let onlyIntFound = true;
+      for (let i=0; i < fieldSplit.length; i+=2) {
+        //See if value is *not* an integer
+        if (isNaN(Number(fieldSplit[i])) && parseInt(fieldSplit[i]).toString() != fieldSplit[i]) {
+          onlyIntFound = false;
+          break;
+        }
+      }
+      //If only integers were found (in the even indexes)
+      if (onlyIntFound) {
+        //Remove the even index items by returning only the odds
+        fieldSplit = fieldSplit.filter((value:string, index:number) => {
+          return index % 2 != 0; //Index is odd
+        });
+      }
+    }
+
+    return fieldSplit;
+  }
+
   private async queryList(list:IListItem, nextPageDetail?:string): Promise<void> {
     return await this.props.context.spHttpClient.post(list.siteUrl + "/_vti_bin/lists.asmx", SPHttpClient.configurations.v1,
     {
@@ -1311,29 +1425,6 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             else if (list.classField)
               oEvent.className = this.ensureValidClassName(elem.getAttribute("ows_" + list.classField));
 
-            //Add group (row/swimlane)
-            if (list.groupId)
-              oEvent.group = list.groupId;
-            else if (list.groupField) {
-              //Find the associated group to assign the item to
-              if (this.props.groups) {
-                let groupFieldValue = elem.getAttribute("ows_" + list.groupField);
-                if (groupFieldValue) {
-                  //Check for and handle calculated & lookup column formatting
-                  const splits = groupFieldValue.split(";#"); //string;#Custom title
-                  groupFieldValue = (splits[1] || splits[0]); //0 index is for other/"regular" fields
-
-                  this.props.groups.every((group:IGroupItem) => {
-                    if (group.name == groupFieldValue) {
-                      oEvent.group = group.uniqueId;
-                      return false; //exit
-                    }
-                    else return true; //keep looping
-                  });
-                }
-              }
-            }
-
             /* Handled above instead, and address where end date is after start but still has no time
             //Special checks for range events (mostly for non-calendar lists)
             if (oEvent.type == "range") {
@@ -1366,26 +1457,6 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             // if (TC.settings.beforeEventAdded)
             //   oEvent = TC.settings.beforeEventAdded(oEvent, $(this), cal);
 
-            /*//Format the tooltip (overwrote by vis setting tooltip.template if provided)
-            const modified = elem.getAttribute("ows_Modified");
-            const author = (elem.getAttribute("ows_Author") ? elem.getAttribute("ows_Author").split(";#")[1]: null);
-            const editor = (elem.getAttribute("ows_Editor") ? elem.getAttribute("ows_Editor").split(";#")[1]: null);
-            oEvent.title = '<div class="vis-tooltipTitle">' + oEvent.title + '</div>' +
-              '<div class="vis-tooltipBody">' +
-                '<b>Location:</b> ' + (elem.getAttribute("ows_Location") || '<i>Not provided</i>') + '<br />' +
-                '<b>Category:</b> ' + (elem.getAttribute("ows_Category") || '<i>Not provided</i>') + '<br />' +
-                '<b>Start:</b> ' + strStartDate + '<br />' +
-                (strEndDate ? '<b>End:</b> ' + strEndDate + '<br />' : '') +
-                //"<b>Description:</b> " + (description || "<i>Not provided</i>") + 
-                "<hr />" +
-                "<div style='font-size:0.9em;'>" +
-                  "<b>Created By:</b> " + (author || "<i>Not provided</i>") + "<br />" +
-                  "<b>Modified By:</b> " + (editor || "<i>Not provided</i>") + "<br />" + 
-                  "<b>Modified On:</b> " + modified + 
-                "</div>" +
-              '</div>';
-            */
-
             //Add data to the event object (for later tooltip template processing)
             fieldKeys.forEach(field => {
               //Skip these fields to prevent their above defined value from being overwritten
@@ -1394,12 +1465,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 
               let fieldValue = elem.getAttribute("ows_" + field);
               if (fieldValue) {
-                try {
                 oEvent[field] = (fieldValue || ""); //save initial value
-                }
-                catch (e) {
-                  debugger;
-                }
+                //Look for special fields
                 if (field == "Description") {
                   //Remove blanks
                   if (fieldValue == "<div></div>" || fieldValue == "<div></div><p>​</p>") //last one has a *hidden* character
@@ -1445,28 +1512,90 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
                   oEvent[field] = fieldValue;
                 }
                 else {
-                  //Check for lookup (and choice?) fields with "123;#Display Name" format and multiple value fields also using ";#" delimeter
-                  let fieldSplit = fieldValue.split(";#");
-                  if (fieldSplit.length == 2)
-                    oEvent[field] = fieldSplit[1];
-                  else if (fieldSplit.length > 2) {
-                    //Multiple value field (";#Chevy;#Porsche;#"); remove potential blank entries in split
-                    fieldSplit = fieldSplit.filter(i => {return i});
-                    oEvent[field] = fieldSplit.join(", ");
+                  //Handle Number/Currency field values like 1.00000000000000 & 10.2000000000000
+                  //@ts-ignore endsWith is valid
+                  if (isNaN(Number(fieldValue)) == false && fieldValue.endsWith("0000")) {
+                    //Number() removes the extra 0s
+                    fieldValue = Number(fieldValue).toString();
                   }
+
+                  //Check for lookup (and choice?) fields with "123;#Display Name" format and multiple value fields also using ";#" delimeter
+                  // let fieldSplit = fieldValue.split(";#");
+                  // if (fieldSplit.length == 2)
+                  //   oEvent[field] = fieldSplit[1];
+                  // else if (fieldSplit.length > 2) {
+                  //   //Multiple value field (";#Chevy;#Porsche;#"); remove potential blank entries in split
+                  //   fieldSplit = fieldSplit.filter(i => {return i});
+                  //   oEvent[field] = fieldSplit.join(", ");
+                  // }
+                  const fieldSplit = this.handleMultiValues(fieldValue);
+                  oEvent[field] = fieldSplit.join(", ");
                 }
               }
             });
 
-            //Add it to the DataSet
-            this._dsItems.add(oEvent);
+            //Add group (row/swimlane)
+            let multipleValuesFound = false;
+            if (list.groupId)
+              oEvent.group = list.groupId;
+            else if (list.groupField && this.props.groups) {
+              //Find the associated group to assign the item to
+              let groupFieldValue = elem.getAttribute("ows_" + list.groupField);
+              if (groupFieldValue) {
+                const groupSplit = this.handleMultiValues(groupFieldValue);
+
+                //Look for "regular" values without ;# (they result in ["Single value"] array)
+                if (groupSplit.length == 1) {
+                  groupFieldValue = groupSplit[0];
+                }
+                else {
+                  //More than one, *real* value is in the field
+                  multipleValuesFound = true;
+
+                  //Create a duplicate event for each selected group value
+                  groupSplit.forEach(groupName => {
+                    const eventClone = structuredClone(oEvent); //error TS2304: Cannot find name 'structuredClone'
+                    //Above duplicates the event object
+                    eventClone.id = IdSvc.getNext(); //Set a new ID
+
+                    //Find the associated group from it's name
+                    this.props.groups.every((group:IGroupItem) => {
+                      if (group.name == groupName) {
+                        eventClone.group = group.uniqueId;
+                        return false; //exit
+                      }
+                      else return true; //keep looping
+                    });
+
+                    //Add the clone to the DataSet
+                    this._dsItems.add(eventClone);
+                  });
+                }
+
+                //Finalize single value events
+                if (multipleValuesFound == false) {
+                  //Find the associated group from it's name
+                  this.props.groups.every((group:IGroupItem) => {
+                    if (group.name == groupFieldValue) {
+                      oEvent.group = group.uniqueId;
+                      return false; //exit
+                    }
+                    else return true; //keep looping
+                  });
+                }
+              } //There is a groupFieldValue
+            } //A groupField was selected && there are this.props.groups
+
+            //Add event/item to the DataSet
+            if (multipleValuesFound == false)
+              this._dsItems.add(oEvent);
           }
         }
       }); //end SOAP response forEach
 
       //Check if more data should be queried
       if (pagingDetails) {
-        var validStartTime = true; //initial
+        let validStartTime = true; //initial
         //Non-calendars seem to be returning these formats:
         // > Paged=Next&p_StartTimeUTC=00000101T588376552265528Z - this one is too long?
         // > Paged=Next&p_StartTimeUTC=18991230T000001Z - this one is invalid

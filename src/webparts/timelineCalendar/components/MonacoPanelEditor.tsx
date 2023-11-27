@@ -8,6 +8,7 @@ interface IMonacoPanelEditorProps {
   disabled: boolean;
   buttonText?: string;
   headerText: string;
+  description?: string;
   value: string;
   language: "html" | "css" | "json" | "typescript";
   onValueChanged: (newValue: string) => void;
@@ -72,14 +73,14 @@ export default class MonacoPanelEditor extends React.Component<IMonacoPanelEdito
             closeButtonAriaLabel='Close'
             onRenderFooterContent={this.onRenderFooterContent}
             isFooterAtBottom={true}>
-            <div style={styles}></div>
+            <div style={styles}>{this.props.description}</div>
             <MonacoEditor
                 key={this.props.key}
                 value={this.props.value}
                 showLineNumbers={true}
                 showMiniMap={false}
                 onValueChange={(newValue: string) => {
-                    //Only temp right now; see "closePanel" function
+                    //Value is only temp right now; see "closePanel" function
                     this.tempValue = newValue;
                 }}
                 language={this.props.language}
