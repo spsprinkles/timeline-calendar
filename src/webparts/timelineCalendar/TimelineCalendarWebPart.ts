@@ -374,7 +374,71 @@ ${this.instanceId}
                       title: "Text",
                       type: CustomCollectionFieldType.color,
                       defaultValue: '#1a1a1a',
-                      required: false
+                      required: false,
+                      //Oddly named: This is really the "perform field validation" function
+                      onGetErrorMessage: (value: string, index: number, item: ICategoryItem) => {
+                        //Using this function just to override the colors in the new/bottom row
+                        //When sortIdx doesn't exists, it's a new row
+                        if (item.sortIdx == null) { //item.name should have a value because this field was just edited
+                          //Update actual field values to match what the color fields show (usually the same as last entered row)
+                          document.querySelectorAll("div.ms-Panel-content div.PropertyFieldCollectionData__panel__table-row:last-child div.PropertyFieldCollectionData__panel__color-field").forEach(function(elem, index) {
+                            switch (index) {
+                              case 0: //Border
+                                item.borderColor = (elem.children[0] as HTMLDivElement).style.backgroundColor;
+                                break;
+                              case 1: //Background
+                                item.bgColor = (elem.children[0] as HTMLDivElement).style.backgroundColor;
+                                break;
+                              case 2: //Text
+                                item.textColor = (elem.children[0] as HTMLDivElement).style.backgroundColor;
+                                break;
+                            }
+                          });
+                        }
+                        //Need to let default validation happen
+                        return '';
+                      },
+                    },
+                    {
+                      id: "fixColors",
+                      title: "fixColors",
+                      isVisible: (field, items) => {
+                        return false;
+                      },
+                      type: CustomCollectionFieldType.custom,
+                      onCustomRender: (field, value, onUpdate, item:ICategoryItem, itemId, onCustomFieldValidation) => {
+                        //const divStyles = { backgroundColor: item.Background, borderColor: item.Border, color:item.Text};
+                        //or https://stackoverflow.com/questions/56934170/creating-styled-component-with-react-createelement
+                        
+                        //When sortIdx exists it's an existing row (not a new one)
+                        if (item.sortIdx == null && item.name == null) { //When item.name == "" it had a value but was cleared out (even for new rows)
+                          //This is an existing row which can be handled normally
+                          //return React.createElement("span", {class: 'legendBox vis-item vis-range', style: { //padding: "0 5px", borderRadius: "2px",
+                          //  borderColor: item.borderColor, color:item.textColor}}, item.name); //border: "1px solid " + item.borderColor
+                          
+                          //Clear color boxes to handle bug where the last added row's color fields copy to
+                          //this new one and it doesn't report the actual colors in the "item" object
+                          document.querySelectorAll("div.ms-Panel-content div.PropertyFieldCollectionData__panel__table-row:last-child div.PropertyFieldCollectionData__panel__color-field").forEach(function(elem, index) {
+                            switch (index) {
+                              case 0: //Border
+                                (elem.children[0] as HTMLDivElement).style.backgroundColor = "#97b0f8"; //Default vis.js colors
+                                break;
+                              case 1: //Background
+                                (elem.children[0] as HTMLDivElement).style.backgroundColor = "transparent";
+                                break;
+                              case 2: //Text
+                                (elem.children[0] as HTMLDivElement).style.backgroundColor = "#1a1a1a";
+                                break;
+                            }
+                          });
+                        }
+                        if (item.name == null || item.name == "") //Don't render a styled box at all
+                          return React.createElement("span", null, null);
+                        else {
+                          const divStyles = self.buildDivStyles(item);
+                          return React.createElement("span", {class: 'legendBox vis-item vis-range', style: divStyles}, item.name);
+                        }
+                      }
                     },
                     {
                       id: "visible",
@@ -507,12 +571,16 @@ ${this.instanceId}
 
                         //Get just the base site URL if these known URL formats were provided
                         value = value.split("/Lists/")[0];
+                        value = value.split("/lists/")[0];
                         value = value.split("/Pages/")[0];
+                        value = value.split("/pages/")[0];
                         value = value.split("/SitePages/")[0];
+                        value = value.split("/sitepages/")[0];
+                        //TODO for library: https://usaf.dps.mil/teams/UA-App-VCP/csktest/ODSTest/Forms/AllItems.aspx
 
                         //Look if .aspx is still at end of the URL to warn user
                         //@ts-ignore (we know endsWith is available)
-                        if (value.endsWith(".aspx"))
+                        if (value.toLowerCase().endsWith(".aspx"))
                           return 'URL must be to the site only and not to a list or page';
                         
                         //Update the field value with the shortened/processed URL
@@ -589,11 +657,13 @@ ${this.instanceId}
                                   item.isCalendar = true;
                                   item.startDateField = "EventDate"; //Set these known values for the user
                                   item.endDateField = "EndDate";
+                                  item.category = "Field:Category";
                                 }
                                 else {
                                   item.isCalendar = false;
                                   item.startDateField = null;
                                   item.endDateField = null;
+                                  item.category = null;
                                 }
                                 
                                 //Finalize the change
@@ -615,7 +685,13 @@ ${this.instanceId}
 
                               //Get non-catalog, "regular" lists from the site
                               const listPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
-                                spHttpClient.get(item.siteUrl + "/_api/web/lists?$select=BaseTemplate,BaseType,Id,Hidden,Title&$filter=IsCatalog eq false and BaseTemplate le 106 and IsPrivate eq false", SPHttpClient.configurations.v1)
+                                //Was including "and BaseTemplate le 106" but that cut out CustomGrid lists created by exporting Excel data
+                                //https://learn.microsoft.com/en-us/openspecs/sharepoint_protocols/ms-wssts/8bf797af-288c-4a1d-a14b-cf5394e636cf
+                                //https://github.com/pnp/pnpcore/blob/dev/src/sdk/PnP.Core/Model/SharePoint/Core/Public/Enums/ListTemplateType.cs
+                                //RootFolder/Name == "Workflow History"
+                                //RootFolder/ServerRelativeUrl == "/sites/TipsToolsApps/Lists/Workflow History"
+                                spHttpClient.get(item.siteUrl + "/_api/web/lists?$select=BaseTemplate,BaseType,Id,Hidden,Title,RootFolder/ServerRelativeUrl" +
+                                  "&$expand=RootFolder&$filter=IsCatalog eq false and IsPrivate eq false", SPHttpClient.configurations.v1)
                                   .then((response: SPHttpClientResponse) => {
                                     if (response.ok) {
                                       //TODO: Instead call .text() and then try/catch with JSON.parse?
@@ -635,53 +711,223 @@ ${this.instanceId}
                                               }
                                             })
                                           else {
-                                            //Ignore known "system" lists
-                                            const systemLists = [
-                                              "Cache Profiles",
-                                              "Content and Structure Reports",
-                                              "Content Organizer Rules",
-                                              "Content type publishing error log",
-                                              "Content type service application error log",
-                                              //"Customized Reports",
-                                              "Device Channels",
-                                              "DirData",
-                                              "DO_NOT_DELETE_SPLIST_SITECOLLECTION_AGGREGATED_CONTENTTYPES",
-                                              "Form Templates",
-                                              "fpdatasources",
-                                              "Long Running Operation Status",
-                                              "Maintenance Log Library",
-                                              "Master Page Gallery",
-                                              "Notification List",
-                                              "Project Policy Item List",
-                                              "Quick Deploy Items",
-                                              "Relationships List",
-                                              "Report of Survey",
-                                              "Reporting Metadata",
-                                              "Reusable Content",
-                                              "SharePointHomeCacheList",
-                                              "Sharing Links",
-                                              "Shared Packages",
-                                              "SharePointHomeCacheList",
-                                              "Site Assets",
-                                              "Site Collection Documents",
-                                              "Site Collection Images",
-                                              "Site Pages",
-                                              "Suggested Content Browser Locations",
-                                              "TaxonomyHiddenList",
-                                              "Tenant Wide Extensions",
-                                              "Translation Packages",
-                                              "Translation Status",
-                                              "User Information List",
-                                              "Variation Labels",
-                                              "Web Template Extensions",
-                                              "Workflow History",
-                                              "Workflows"
-                                            ];
-                                            if (systemLists.indexOf(list.Title) != -1) //found one
-                                              return; //skip
+                                            const ignoredLists = [
+                                              {
+                                                BaseTemplate: 160,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Access Requests"
+                                              },
+                                              {
+                                                BaseTemplate: 125,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/_catalogs/appdata"
+                                              },
+                                              {
+                                                BaseTemplate: 336,
+                                                WebRelativeUrl: "/AppCatalog"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Cache Profiles"
+                                              },
+                                              {
+                                                BaseTemplate:334,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/ClientSideAssets"
+                                              },
+                                              {
+                                                BaseTemplate: 331,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/ComponentManifests"
+                                              },
+                                              {
+                                                BaseTemplate: 124,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/_catalogs/design"
+                                              },
+                                              {
+                                                //Title: "Content and Structure Reports",
+                                                BaseTemplate: 100,
+                                                WebRelativeUrl: "/Reports List"
+                                              },
+                                              {
+                                                //Title: "Content Organizer Rules"
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/RoutingRules"
+                                              },
+                                              {
+                                                //Title: "Content type service application error log",
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/ContentTypeAppLog"
+                                              },
+                                              {
+                                                //Title: Content type publishing error log
+                                                BaseTemplate:100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/ContentTypeSyncLog"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/DeviceChannels"
+                                              },
+                                              {
+                                                //Title: "DO_NOT_DELETE_SPLIST_SITECOLLECTION_AGGREGATED_CONTENTTYPES"
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/DO_NOT_DELETE_SPLIST_SITECOLLECTION_AGGREGATED_CON"
+                                              },
+                                              {
+                                                BaseTemplate: 101,
+                                                WebRelativeUrl: "/FormServerTemplates"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Long Running Operation Status"
+                                              },
+                                              {
+                                                //Title: "MicroFeed"
+                                                BaseTemplate: 544,
+                                                WebRelativeUrl: "/Lists/PublishedFeed"
+                                              },
+                                              {
+                                                //Title: Notification List
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Notification Pages"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/ProjectPolicyItemList"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Quick Deploy Items"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Relationships List"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/Reporting Metadata"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                WebRelativeUrl: "/ReusableContent"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/SharePointHomeCacheList"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/PackageList"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/PageDiagnosticsResultList70B82488D89F4AAPDR"
+                                              },
+                                              {
+                                                BaseTemplate: 3300,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Sharing Links"
+                                              },
+                                              {
+                                                BaseTemplate: 101,
+                                                WebRelativeUrl: "/SiteAssets"
+                                              },
+                                              {
+                                                BaseTemplate: 101,
+                                                WebRelativeUrl: "/SiteCollectionDocuments"
+                                              },
+                                              {
+                                                BaseTemplate: 851,
+                                                WebRelativeUrl: "/SiteCollectionImages"
+                                              },
+                                              {
+                                                BaseTemplate: 119,
+                                                WebRelativeUrl: "/SitePages"
+                                              },
+                                              {
+                                                //Title: Suggested Content Browser Locations
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/PublishedLinks"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/TaxonomyHiddenList"
+                                              },
+                                              {
+                                                BaseTemplate: 337,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/TenantWideExtensions"
+                                              },
+                                              {
+                                                BaseTemplate: 101,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Translation Packages"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Translation Status"
+                                              },
+                                              {
+                                                //Title: User Information List
+                                                BaseTemplate: 112,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/_catalogs/users"
+                                              },
+                                              {
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Variation Labels"
+                                              },
+                                              {
+                                                //Title: Web Template Extensions
+                                                BaseTemplate: 3415,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/_catalogs/wte"
+                                              },
+                                              {
+                                                BaseTemplate: 122,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/_catalogs/wfpub"
+                                              },
+                                              {
+                                                BaseTemplate: 140,
+                                                Hidden: true,
+                                                WebRelativeUrl: "/Lists/Workflow History"
+                                              },
+                                              {
+                                                BaseTemplate: 107,
+                                                WebRelativeUrl: "/WorkflowTasks"
+                                              }
+                                            ]
+
+                                            //Ignore known lists
+                                            const foundList = ignoredLists.filter(ignList => {
+                                              return (ignList.BaseTemplate == list.BaseTemplate && list.RootFolder.ServerRelativeUrl.endsWith(ignList.WebRelativeUrl))
+                                            })
+                                            if (foundList.length > 0)
+                                              return; //skip this list                                     
 
                                             //Look for lists
-                                            if (list.BaseTemplate == 100 || list.BaseTemplate == 104 || list.BaseTemplate == 107 || list.BaseTemplate == 150 || list.BaseTemplate == 171 || list.BaseTemplate == 1100)
+                                            if (list.BaseTemplate == 100 || list.BaseTemplate == 104 || list.BaseTemplate == 107 || list.BaseTemplate == 120 || list.BaseTemplate == 150 || list.BaseTemplate == 171 || list.BaseTemplate == 1100)
                                               lists.push({
                                                 key: list.Id,
                                                 text: list.Title,
@@ -1218,8 +1464,11 @@ ${this.instanceId}
                                       // if (field.FieldTypeKind != 0 && (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || 
                                       //       field.TypeAsString == "Lookup"|| field.TypeAsString == "Calculated"))
                                       if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
-                                           (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "Lookup" || 
-                                              field.TypeAsString == "User")))
+                                           (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "MultiChoice" || 
+                                            field.TypeAsString == "Lookup" || field.TypeAsString == "LookupMulti" ||
+                                            //OutcomeChoice is "Task Outcome in the classic UI"
+                                            field.TypeAsString == "OutcomeChoice" || field.TypeAsString == "User" || field.TypeAsString == "UserMulti" ||
+                                            field.TypeAsString == "TaxonomyFieldType" || field.TypeAsString == "TaxonomyFieldTypeMulti")))
                                         promiseData.push({
                                           key: "Field:" + field.InternalName,
                                           text: field.Title
