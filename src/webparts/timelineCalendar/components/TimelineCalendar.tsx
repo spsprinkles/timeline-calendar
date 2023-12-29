@@ -14,8 +14,15 @@ import {SPHttpClient, SPHttpClientResponse} from '@microsoft/sp-http';
 import { IFrameDialog, IFrameDialogProps } from "@pnp/spfx-controls-react/lib/IFrameDialog";
 import { DialogType } from 'office-ui-fabric-react/lib/Dialog';
 //import { SPComponentLoader } from '@microsoft/sp-loader';
-import { ICategoryItem, IGroupItem, IListItem } from './IConfigurationItems';
+import { ICalendarItem, ICategoryItem, IGroupItem, IListItem } from './IConfigurationItems';
 import * as Handlebars from 'handlebars';
+import { MSGraphClientV3 } from '@microsoft/sp-http';
+import { GraphError } from '@microsoft/microsoft-graph-client'; //ResponseType
+import * as MicrosoftGraph from '@microsoft/microsoft-graph-types';
+//import { DescriptionFieldLabel } from 'TimelineCalendarWebPartStrings';
+//import { Dialog, DialogType, DialogFooter } from '@fluentui/react/lib/Dialog';
+//import { DefaultButton } from '@fluentui/react/lib/Button'; //PrimaryButton
+//import { TeachingBubbleContentBase } from 'office-ui-fabric-react';
 
 //declare const window: any; //temp TODO
 
@@ -363,9 +370,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 			return new Date(d.replace(" ", "T")); //needed for IE
   }
 
-  private ensureValidClassName(className:string): string {
-    if (className == null)
+  private ensureValidClassName(className:string | []): string {
+    if (className == null || className.length == 0)
       return null; //or "" or cal.className ???
+
+    if (Array.isArray(className))
+      className = (className as []).join(", ");
+
+    className = (className as string); //just for TypeScript compiling
 
     //Calculated fields add extra content, remove it
     if (className.indexOf(";#") != -1) { //ex: string;#CalculatedValueHere
@@ -449,7 +461,6 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   private getMinDate(): Date {
     //Build dates for min/max data querying; default 2 months before today
     let minDate = new Date();
-    //minDate.setMonth(minDate.getMonth() - 2);
     minDate.setDate(minDate.getDate() - (this.props.minDays || 60));
     return minDate;
   }
@@ -932,7 +943,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           content: (g.html ? theContent : g.name),
           name: g.name, //For use in the bottomGroupsBar
           order: g.sortIdx,
-          visible: g.visible
+          visible: g.visible,
+          className: g.className
         }
       });
 
@@ -955,31 +967,44 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       document.getElementById("legend-" + this.props.instanceId).style.display = "block";
     }
 
+    //Remove any existing events to prevent duplicate event adding (while in edit mode)
+    const itemEvents = this._dsItems.get({
+      filter: function (item:any) {
+        return (item.className != "weekend");
+      }
+    });
+    this._dsItems.remove(itemEvents);
+
+    //Get SharePoint list/calendar data
+    let spPromise = null as Promise<void | any[]>;
     if (this.props.lists) {
-      //Remove any existing events to prevent duplicate adding (while in edit mode)
-      const itemEvents = this._dsItems.get({
-        filter: function (item:any) {
-          return (item.className != "weekend");
-        }
-      });
-      this._dsItems.remove(itemEvents);
-      
       //Get the view CAML
-      this.getViewsCAML().then(() =>{
+      spPromise = this.getViewsCAML().then(() =>{
         //Now get the events
-        this.getEvents().then(response => {
+        this.getSharePointEvents().then(response => {
           //console.log("all data returned, response is undefined because no data is actually returned");
-          showLegend();
+          //showLegend();
         });
       });
     }
-    else
+
+    //Get Outlook calendar events
+    let outlookPromise = null as Promise<void | any[]>;
+    if (this.props.calendars) {
+      outlookPromise = this.getOutlookEvents()
+    }
+
+    //When both are finished
+    Promise.all([spPromise, outlookPromise]).then(response => {
+      //console.log("all data returned, response is undefined because no data is actually returned");
       showLegend();
+    });
   }
 
-  private async getViewsCAML(): Promise<any[]> {
+  //private async, return await
+  private getViewsCAML(): Promise<any[]> {
     //Build a new array of unique calendars to avoid querying the same one multiple times
-    return await Promise.all(this.props.lists.map((list:IListItem) => {
+    return Promise.all(this.props.lists.map((list:IListItem) => {
       //Only for lists that have View specified
       if (list.view !== null && list.view.trim() !== "") {
         //Build list filter, first assume a title then check if GUID
@@ -1054,7 +1079,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     return fieldKeys;
   }
 
-  private getEvents(): Promise<any[]> {
+  private getSharePointEvents(): Promise<any[]> {
     return Promise.all(this.props.lists.map((list:IListItem) => {
       //Check for advanced configs
       if (list.configs && list.configs.trim() != "") {
@@ -1403,7 +1428,6 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
               start: eventStartDate,
               //end: elem.getAttribute("ows_EndDate"),
               type: "range", //Changed later as needed
-              //location: elem.getAttribute("ows_Location"),
               //className: //assigned next
               //group: list.groupId //assigned next
             } as any;
@@ -1460,7 +1484,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             //Add data to the event object (for later tooltip template processing)
             fieldKeys.forEach(field => {
               //Skip these fields to prevent their above defined value from being overwritten
-              if (field == "content" || field == "start" || field == "end")
+              if (field == "id" || field == "content" || field == "start" || field == "end" || field == "type" || field == "className")
                 return;
 
               let fieldValue = elem.getAttribute("ows_" + field);
@@ -1620,4 +1644,374 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       console.error(error);
     });
   }
+
+  private getOutlookEvents(): Promise<any[]> {
+    return Promise.all(this.props.calendars.map((calendar:ICalendarItem) => {
+      /*
+      //Check for advanced configs
+      if (list.configs && list.configs.trim() != "") {
+        try {
+          const configs = JSON.parse(list.configs);
+          if (configs.camlFilter && configs.camlFilter.trim() != "")
+            list.camlFilter = configs.camlFilter;
+          
+          //Set visible prop
+          list.visible = (configs.visible == false ? false : true);
+
+          //Set UTC prop
+          if (configs.dateInUtc != null)
+            list.dateInUtc = configs.dateInUtc;
+          
+          //Option to dynamically assign/build
+          //const userOptions = JSON.parse(this.props.visJsonProperties); //just in case
+          //options = this.extend(true, options, userOptions); //userOptions override set "defaults" above
+        }
+        catch (e) {}
+      }
+      */
+
+      if (calendar.visible == false || calendar.persona == null || calendar.persona.length == 0)
+        return; //skip this one
+
+      return this.queryCalendar(calendar, 0);
+    }))
+  }
+  
+  //TODO: Compare with SP list; Removed private *async* and return *await*
+
+  private queryCalendar(calObj:ICalendarItem, skipNumber:number): Promise<void> {
+    //Set classField and className props
+    //Split on the : char to determine if a field or category was selected (Field:owaField or Static:category.uniqueId)
+    if (calObj.category) {
+      const catValues = calObj.category.split(":");
+      if (catValues[0] == "Field") {
+        calObj.classField = catValues[1];
+        if (calObj.className)
+          calObj.className = null;
+      }
+      else { //[0] assumed to be "Static"
+        const categoryId = catValues[1]; //Will be the uniqueId, need to get the display name next
+        if (this.props.categories) {
+          this.props.categories.every((category:ICategoryItem) => {
+            if (category.uniqueId == categoryId) {
+              calObj.className = category.name; //store the display name instead
+              if (calObj.classField)
+                calObj.classField = null;
+              return false; //exit
+            }
+            else return true; //keep looping
+          });
+        }
+      }
+    }
+
+    //Set groupField and groupId props
+    //Split on the : char to determine if a field or category was selected
+    if (calObj.group) {
+      const catValues = calObj.group.split(":");
+      if (catValues[0] == "Field") {
+        calObj.groupField = catValues[1];
+        if (calObj.groupId)
+          calObj.groupId = null;
+      }
+      else { //[0] assumed to be "Static"
+        calObj.groupId = catValues[1]; //Will be the uniqueId
+        if (calObj.groupField)
+          calObj.groupField = null;
+      }
+    }
+
+    return this.props.graphClient.then((client:MSGraphClientV3): void => {
+      const fieldKeys = this.getFieldKeys();
+      //singleValueExtendedProperties doesn't need to be selected (the $expand seems to include it already)
+      let selectFields = "id,createdDateTime,lastModifiedDateTime,categories,subject,isAllDay,webLink,body,start,end,location,organizer";
+      //Add fields used in the tooltip
+      fieldKeys.forEach(field => {
+        //Only select Event properties can be allowed or error received:
+        //HTTP 400: Could not find a property named 'Category' on type 'Microsoft.OutlookServices.Event'.
+        switch(field) {
+          //In addition to those defined in selectFields above...
+          case "originalStartTimeZone":
+          case "originalEndTimeZone":
+          case "iCalUId":
+          case "reminderMinutesBeforeStart":
+          case "isReminderOn":
+          case "hasAttachments":
+          case "bodyPreview":
+          case "importance":
+          case "sensitivity":
+          case "isCancelled":
+          case "isOrganizer":
+          case "responseRequested":
+          case "showAs":
+          case "type":
+          case "onlineMeetingUrl":
+          case "onlineMeeting":
+          case "isOnlineMeeting":
+          case "onlineMeetingProvider":
+          case "allowNewTimeProposals":
+          case "hideAttendees":
+            selectFields += "," + field;
+        }
+      });
+
+      //Build API URL based on user or group calendar
+      let apiURL = "";
+      if (calObj.persona[0].personaType == "user")
+        apiURL = "/users/" + calObj.persona[0].mail + "/calendars/" + calObj.calendar + "/calendarView";
+      else //assumed to be a group
+        apiURL = "/groups/" + calObj.persona[0].key + "/calendarView";
+
+      //Get calender view events
+      client.api(apiURL).query(`startDateTime=${this.getMinDate().toISOString()}&endDateTime=${this.getMaxDate().toISOString()}`)
+      .select(selectFields).top(500).skip(skipNumber)
+      //TODO: .filter("sensitivity ne 'private'")
+      //Make the charm/icon value be included
+      .expand("singleValueExtendedProperties($filter=id eq 'Integer {11000E07-B51B-40D6-AF21-CAA85EDAB1D0} Id 0x0027')")
+      //Headers -> Prefer: outlook.timezone (string) -> If not specified dates are returned in UTC
+      .get((error:GraphError, response:any, rawResponse?:any) => {
+        if (error) {
+          //resolve(error.message);
+        }
+        else {
+          //Extend Graph.Event interface with implicitly defined index signature (to support eventObj["keyFieldName"] retrieval)
+          const events:(MicrosoftGraph.Event & {[key: string]:any})[] = response.value;
+          events.forEach(calEvent => {
+            //Get the "title" value
+            let strTitle = "[No Title]"; //default value, changed next
+            if (calEvent.subject != null && calEvent.subject.trim() != "") {
+              strTitle = calEvent.subject;
+            }
+            
+            //Process "non-dates" ("0001-01-01T00:00:00Z" is returned for private events)
+            if (calEvent.createdDateTime == "0001-01-01T00:00:00Z") { //had: calEvent.sensitivity == "private" && 
+              calEvent.createdDateTime = null;
+              calEvent.lastModifiedDateTime = null;
+            }
+
+            //Build the event obj
+            let oEvent = {
+              id: IdSvc.getNext(),
+              spId: calEvent.id, //TODO: Rename to sourceId?
+              encodedAbsUrl: calEvent.webLink,
+              content: strTitle,
+              //title: elem.getAttribute("ows_Title"), //Tooltip
+              start: new Date(calEvent.start.dateTime + (calEvent.isAllDay ? "" : "Z")), //treat as local time for all day events
+              end: new Date(calEvent.end.dateTime + (calEvent.isAllDay ? "" : "Z")),
+              type: "range", //Changed later as needed
+                  //  location: calEvent.location.displayName,
+              //className: //assigned next
+              //group: list.groupId //assigned next
+            } as any;
+            
+            //Force single day events as point?
+            if (this.props.singleDayAsPoint && (calEvent.start.dateTime.substring(0, 10) == calEvent.end.dateTime.substring(0, 10)))
+              oEvent.type = "point";
+
+            //Add class/category
+            if (calObj.className)
+              oEvent.className = this.ensureValidClassName(calObj.className);
+            //Apply class by category field
+            else if (calObj.classField)
+              oEvent.className = this.ensureValidClassName(calEvent[calObj.classField]);
+
+            /* Handled above instead, and address where end date is after start but still has no time
+
+            //Build date variables
+            const allDayEvent = (elem.getAttribute("ows_fAllDayEvent") == "1" ? true : false);
+            let strStartDateValue = elem.getAttribute(startFieldName);
+            if (allDayEvent)
+              strStartDateValue = strStartDateValue.split("Z")[0]; //Drop zulu to make it handle date as local
+            const eventStartDate = this.formatDateFromSOAP(strStartDateValue);
+
+            let eventEndDate;
+            if (endFieldName) {
+              let strEndDateValue = elem.getAttribute(endFieldName);
+              if (allDayEvent)
+                strEndDateValue = strEndDateValue.split("Z")[0]; //Drop zulu to make it handle date as local
+              eventEndDate = this.formatDateFromSOAP(strEndDateValue);
+              //Check for non-calendar list dates in which no time is provided...
+              if (eventEndDate.getHours() == 0 && eventEndDate.getMinutes() == 0) {
+                //...change the time to the end of day
+                eventEndDate.setDate(eventEndDate.getDate() + 1);
+                eventEndDate.setSeconds(eventEndDate.getSeconds() - 1);
+                //strEndDate = eventEndDate.format("yyyy-MM-dd HH:mm:ss");
+                //These are not the UTC versions...
+                //strEndDate = eventEndDate.getFullYear().toString() + "-" + (eventEndDate.getMonth()+1).toString() +
+              }
+            }
+
+
+            //Special checks for range events (mostly for non-calendar lists)
+            */
+
+            if (oEvent.className && oEvent.className == this.ensureValidClassName(this.props.holidayCategories)) {
+              oEvent.type = "background"; //change to background
+              oEvent.group = null; //apply to entire timeline
+            }
+            
+            // //Call custom function if provided
+            // if (TC.settings.beforeEventAdded)
+            //   oEvent = TC.settings.beforeEventAdded(oEvent, $(this), cal);
+
+            //Add data to the event object (for later tooltip template processing)
+            /*
+            Location (location.displayName)
+            Category (categories[])
+            Description (body.content assumed body.contentType == "html")
+              "content": "<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"></head><body>
+              <div class=\"cal_1662 (number changes)\"></div>
+              <div class=\"cal_1662\">
+                <div>
+                  <div class=\"x_elementToProof elementToProof\" style=\"font-family:Aptos,Aptos_EmbeddedFont,Aptos_MSFontService,Calibri,Helvetica,sans-serif; font-size:12pt; color:rgb(0,0,0)\">
+                    Just entering text produces this. Now edited by Mike.</div></div></div></body></html>"
+            Author ( "organizer": { "emailAddress": { "name": "John Doe",)
+            Editor (? perhaps an extended MAPI property)
+            Modified (lastModifiedDateTime) //and Created (createdDateTime) as "ISOZ" string
+            */
+            fieldKeys.forEach(field => {
+              //Skip these fields to prevent their above defined value from being overwritten
+              if (field == "id" || field == "content" || field == "start" || field == "end" || field == "type" || field == "className")
+                return;
+
+              let fieldValue = calEvent[field]; //TODO: support object values like organizer.emailAddress.address
+              let wasMapped = true;
+              //Map certain field names
+              switch (field) {
+                case "Location":
+                  fieldValue = calEvent.location.displayName;
+                  oEvent["Location"] = fieldValue;
+                  break;
+
+                case "Category":
+                  fieldValue = calEvent.categories.join(", ");
+                  oEvent["Category"] = fieldValue;
+                  break;
+
+                case "Description":
+                  fieldValue = (calEvent.body && calEvent.body.content || "");
+                  oEvent["Description"] = fieldValue;
+                  break;
+
+                case "Author":
+                  fieldValue = (calEvent.organizer && calEvent.organizer.emailAddress.name || "");
+                  oEvent["Author"] = fieldValue;
+                  break;
+
+                // case "Editor":
+                //   fieldValue = calEvent.??; //perhaps an extended MAPI property
+                //   oEvent["Editor"] = fieldValue;
+                //   break;
+
+                case "Created":
+                  fieldValue = calEvent.createdDateTime;
+                  oEvent["Created"] = fieldValue;
+                  break;
+                
+                case "Modified":
+                  fieldValue = calEvent.lastModifiedDateTime;
+                  oEvent["Modified"] = fieldValue;
+                  break;
+
+                case "charmIcon":
+                  fieldValue = (calEvent.singleValueExtendedProperties && calEvent.singleValueExtendedProperties[0] &&
+                    calEvent.singleValueExtendedProperties[0].value || "");
+                  if (fieldValue == "None")
+                    fieldValue = "";
+                  oEvent["charmIcon"] = fieldValue;
+                  break;
+
+                default:
+                  wasMapped = false;
+              }
+
+              if (fieldValue && wasMapped == false) {
+                oEvent[field] = (fieldValue || ""); //save initial value
+              }
+            });
+
+            //Add group (row/swimlane)
+            let multipleValuesFound = false;
+            if (calObj.groupId)
+              oEvent.group = calObj.groupId;
+            else if (calObj.groupField && this.props.groups) {
+              //Get value of group field
+              let groupFieldValue = null as string | string[];
+              switch (calObj.groupField) {
+                case "categories":
+                  groupFieldValue = calEvent.categories;
+                  break;
+
+                case "showAs":
+                  //MicrosoftGraph.FreeBusyStatus = "unknown" | "free" | "tentative" | "busy" | "oof" | "workingElsewhere";
+                  groupFieldValue = calEvent.showAs.toString();
+                  break;
+
+                case "charm":
+                  groupFieldValue = (calEvent.singleValueExtendedProperties && calEvent.singleValueExtendedProperties[0] &&
+                    calEvent.singleValueExtendedProperties[0].value || "");
+                  if (groupFieldValue == "None")
+                  groupFieldValue = "";
+                  break;
+
+                default:
+                  groupFieldValue = calEvent[calObj.groupField];
+              }
+
+              //Find the associated group to assign the item to
+              if (groupFieldValue) {
+                if (Array.isArray(groupFieldValue)) {
+                  multipleValuesFound = true;
+
+                  //Create a duplicate event for each selected group value
+                  groupFieldValue.forEach(groupName => {
+                    const eventClone = structuredClone(oEvent); //error TS2304: Cannot find name 'structuredClone'
+                    //Above duplicates the event object
+                    eventClone.id = IdSvc.getNext(); //Set a new ID
+
+                    //Find the associated group from it's name
+                    this.props.groups.every((group:IGroupItem) => {
+                      if (group.name == groupName) {
+                        eventClone.group = group.uniqueId;
+                        return false; //exit
+                      }
+                      else return true; //keep looping
+                    });
+
+                    //Add the clone to the DataSet
+                    this._dsItems.add(eventClone);
+                  });
+                }
+
+                //Finalize single value events
+                if (multipleValuesFound == false) {
+                  //Find the associated group from it's name
+                  this.props.groups.every((group:IGroupItem) => {
+                    if (group.name == groupFieldValue) {
+                      oEvent.group = group.uniqueId;
+                      return false; //exit
+                    }
+                    else return true; //keep looping
+                  });
+                }
+              } //There is a groupFieldValue
+            } //A groupField was selected && there are this.props.groups
+
+            //Add event/item to the DataSet
+            if (multipleValuesFound == false)
+              this._dsItems.add(oEvent);
+          }); //foreach event
+
+          //Check if more data should be queried
+          let nextLink = response["@odata.nextLink"] as string;
+          if (nextLink) {
+            //Query for more events (get the next page)
+            const eqIndex = nextLink.lastIndexOf("=");
+            const skipNumber = Number(nextLink.substring(eqIndex + 1));
+            return this.queryCalendar(calObj, skipNumber);
+          }
+        } //no error returned
+      }); //end Graph.get()
+    }); //end Graph client
+  } //end queryCalendar()
 }

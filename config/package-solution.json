@@ -3,7 +3,7 @@
   "solution": {
     "name": "Timeline Calendar",
     "id": "fdcba3a4-d4a6-4ac7-a370-98c7d5d8e7db",
-    "version": "0.5.3.0",
+    "version": "0.5.3.1",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
@@ -15,6 +15,24 @@
       "termsOfUseUrl": "",
       "mpnId": ""
     },
+    "webApiPermissionRequests": [
+      {
+        "resource": "Microsoft Graph",
+        "scope": "User.Read"
+      },
+      {
+        "resource": "Microsoft Graph",
+        "scope": "User.Read.All"
+      },
+      {
+        "resource": "Microsoft Graph",
+        "scope": "Calendars.Read.Shared"
+      },
+      {
+        "resource": "Microsoft Graph",
+        "scope": "Group.Read.All"
+      }
+    ],
     "metadata": {
       "shortDescription": {
         "default": "Create a dynamic, filterable timeline that can pull in data from multiple sources."

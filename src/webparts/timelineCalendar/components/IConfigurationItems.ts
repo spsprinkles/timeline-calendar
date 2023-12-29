@@ -1,3 +1,35 @@
+import { IPersonaSharedProps } from '@fluentui/react/lib/Persona'; //Will "overwrite" IPersonaProps from this
+
+//"Overwrite" the expected interface to add properties
+export interface IPersonaProps extends IPersonaSharedProps {
+    key: string
+    mail: string
+    personaType: "user" | "group"
+}
+
+export interface IMemberOfResult {
+    "@odata.type": string
+    id: string
+    displayName?: string
+    mail: string
+    visibility: string
+}
+
+export interface ICalendarItem {
+    uniqueId: string
+    sortIdx?: number //auto field
+    persona: IPersonaProps[]
+    calendar: any
+    category: string
+    classField: string
+    className: string
+    group:string
+    groupId: string
+    groupField: string
+    ignorePrivate: boolean
+    visible: boolean
+}
+
 export interface ICategoryItem {
     uniqueId: string
     sortIdx?: number //auto field
@@ -15,6 +47,7 @@ export interface IGroupItem {
     name: string
     visible: boolean
     html: string
+    className: string
 }
 
 export interface IListItem {

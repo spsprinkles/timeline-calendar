@@ -1,4 +1,5 @@
 import { WebPartContext } from "@microsoft/sp-webpart-base";
+import { MSGraphClientV3 } from '@microsoft/sp-http';
 
 export interface ITimelineCalendarProps {
   description: string;
@@ -12,10 +13,12 @@ export interface ITimelineCalendarProps {
   groups: any[];
   categories: any[];
   lists: any[];
+  calendars: any[];
   //renderEvents: any;
   getDefaultTooltip: any;
   buildDivStyles: any;
   context: WebPartContext;
+  graphClient: Promise<MSGraphClientV3>;
   domElement: HTMLElement;
   minDays: number;
   maxDays: number;
