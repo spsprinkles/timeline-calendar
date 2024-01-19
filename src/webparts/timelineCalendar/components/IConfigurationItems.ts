@@ -15,19 +15,31 @@ export interface IMemberOfResult {
     visibility: string
 }
 
+export interface ICalendarConfigs {
+    //Augmenting props
+    classField?: string
+    className?: string
+    groupId?: string
+    groupField?: string
+    //Advanced configs
+    visible: boolean
+    multipleCategories: "useFirst" | "useLast"
+    fieldValueMappings: any
+}
+
 export interface ICalendarItem {
     uniqueId: string
     sortIdx?: number //auto field
     persona: IPersonaProps[]
-    calendar: any
+    resource: any
+    filter: string
     category: string
-    classField: string
-    className: string
+    //classField: string
+    //className: string
     group:string
-    groupId: string
-    groupField: string
-    ignorePrivate: boolean
-    visible: boolean
+    //groupId: string
+    //groupField: string
+    configs?:string
 }
 
 export interface ICategoryItem {
@@ -50,6 +62,20 @@ export interface IGroupItem {
     className: string
 }
 
+export interface IListConfigs {
+    //Augmenting props
+    classField?: string
+    className?: string
+    groupId?: string
+    groupField?: string
+    //Advanced configs
+    visible: boolean
+    camlFilter?: string
+    dateInUtc?: boolean
+    extendEndTimeAllDay?: boolean
+    multipleCategories: "useFirst" | "useLast"
+}
+
 export interface IListItem {
     uniqueId: string
     sortIdx?: number //auto field
@@ -64,13 +90,13 @@ export interface IListItem {
     startDateField: string
     endDateField?: string
     category: string
-    classField: string
-    className: string
+    //classField: string
+    //className: string
     group:string
-    groupId: string
-    groupField: string
+    //groupId: string
+    //groupField: string
     configs?: string //Advanced Configurations (which will encompass the below)
-    visible?: boolean //advanced prop
-    camlFilter?: string //advanced prop
-    dateInUtc?: boolean //advanced prop
+    //visible?: boolean //advanced prop
+    //camlFilter?: string //advanced prop
+    //dateInUtc?: boolean //advanced prop
 }

@@ -1,6 +1,6 @@
 import * as React from 'react';
 //import { IPersonaSharedProps } from '@fluentui/react/lib/Persona'; //IPersonaProps
-import { NormalPeoplePicker, IBasePickerSuggestionsProps, IBasePickerStyles, //ValidationState
+import { NormalPeoplePicker, IBasePickerSuggestionsProps, IBasePickerStyles, //ValidationState,
     IPeoplePickerItemSelectedProps, PeoplePickerItem } from '@fluentui/react/lib/Pickers';
 import { IPersonaProps } from './IConfigurationItems';
 import { MSGraphClientV3,} from '@microsoft/sp-http';
@@ -10,13 +10,14 @@ import { Dialog, DialogType, DialogFooter } from '@fluentui/react/lib/Dialog';
 import { DefaultButton } from '@fluentui/react/lib/Button'; //PrimaryButton
 
 interface IDirectoryPickerProps {
+  getGraphScopes: () => string[];
   onChange: (items:IPersonaProps[]) => void;
   selectedPersonas: IPersonaProps[];
   initialSuggestions: IPersonaProps[];
   graphClient: Promise<MSGraphClientV3>;
   disabled: boolean;
   //uniqueId: string;
-  //sortIdx?: number;
+  //sortIdx: number;
 }
 
 export interface IDirectoryPickerState {
@@ -48,6 +49,8 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
       };
     }
 
+    private _pickerElem:HTMLInputElement = null;
+
     //When component first loads (not fired again for row re-used as the "new row")
     public componentDidMount(): void {
       //Nothing needed
@@ -73,10 +76,26 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
             suggestionsContainerAriaLabel: 'Suggested items',
         };
 
-        const toggleHideMissingPermissionsDialog = (): void => {
+        const onBlur = (elem:React.FocusEvent<HTMLInputElement>): void => {
+          //Save reference for use in checking when dialog closes
+          this._pickerElem = elem.target;
+        }
+
+        const dismissMissingPermissionsDialog = (): void => {
           this.setState({
             hideMissingPermissionsDialog: !this.state.hideMissingPermissionsDialog
           });
+
+          //See if persona selector needs to get refocused in case Graph perms not enough to query users or groups
+          if ((this.state.selected == null || this.state.selected.length === 0) &&
+                //directoryListing must have results or force clicking it below will cause another search and dialog (loop)
+                this.state.directoryListing.length > 0) {
+            //After dialog is closed...
+            setTimeout(() => {
+              if (this._pickerElem)
+                this._pickerElem.click(); //force any user/group selection list returned from Graph query to appear
+            }, 500); //200 was not enough
+          }
         }
 
         const onInputChanged = (filterText: string, currentPersonas: IPersonaProps[], limitResults?: number): IPersonaProps[] | Promise<IPersonaProps[]> => {
@@ -102,28 +121,6 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                 //.orderby ???
                 //.count(true)
                 .get((error:GraphError, response:any, rawResponse?:any) => {
-                  //Look for and save Graph scope information
-                  /*
-                  for (const key in sessionStorage) {
-                    //@ts-ignore (for startsWith)
-                    if (key && typeof key == "string" && key.startsWith('{"authority":')) {
-                      try {
-                        const keyObj = JSON.parse(key);
-                        //Find the correct Graph results entry
-                        if (keyObj.scopes && keyObj.scopes.indexOf('profile openid') != -1) {
-                          const scopes = keyObj.scopes.split(" ");
-                          this._graphScopes = scopes.map((s:string, i:Number) => {
-                            if (s.indexOf('graph.microsoft') != -1)
-                              return s.split("/")[3]; //https://graph.microsoft.com/User.Read (just get "User.Read" portion)
-                            else
-                              return s;
-                          });
-                        }
-                      }
-                      catch (e) {}
-                    }
-                  }*/
-                  
                   if (error)
                     resolve(error.message);
                   else {
@@ -171,7 +168,8 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                             mail: group.mail,
                             //imageInitials: "G", //can force specific initials
                             text: group.displayName,
-                            secondaryText: group.visibility + " group",
+                            //secondaryText: group.visibility + " group",
+                            secondaryText: group.mail,
                             //canExpand: true,
                             //isValid: true
                             personaType: "group"
@@ -203,49 +201,71 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
               let errorSubMsg:string = undefined;
 
               //Look for CAS policy error (should be in both queries but just check the first)
+              //"AADSTS53003: Access has been blocked by Conditional Access policies. The access policy does not allow token issuance. Trace ID: 53f94e25-27a1-4f11-8318-b4c794570800 Correlation ID: 003f1386-5365-4a10-9f5b-f762e1788619 Timestamp: 2023-12-28 13:51:19Z"
+              //Could also be "Token request previously failed" for same CAS policy after continued searches
               //@ts-ignore (for startsWith)
-              if (typeof values[0] == "string" && values[0].startsWith("AADSTS53003:")) { //"AADSTS53003: Access has been blocked by Conditional Access policies. The access policy does not allow token issuance. Trace ID: 53f94e25-27a1-4f11-8318-b4c794570800 Correlation ID: 003f1386-5365-4a10-9f5b-f762e1788619 Timestamp: 2023-12-28 13:51:19Z"
+              if (typeof values[0] === "string" && (values[0].startsWith("AADSTS53003:") || values[0] === "Token request previously failed")) {
                 //error.code == "InteractionRequiredAuthError" // error.statusCode == -1
                 hideDialog = false;
                 errorHeader = "Graph API token cannot be generated";
                 errorMsg = "Your current sign-in may be from a \"location\" that is restricted. Please connect to your organization's network or VPN and re-sign in before trying again.";
-                errorSubMsg = values[0];
+                if (values[0] === "Token request previously failed")
+                  errorSubMsg = (sessionStorage["msal.error.description"] || ""); //Show prior MSAL error
+                else
+                  errorSubMsg = values[0];
               }
               else {
                 //Look for permission error messages (due to lack of approved Graph scopes)
-                if (values[0] == "Insufficient privileges to complete the operation.")
-                  errorMsg = "users" + 
+                if (values[0] === "Insufficient privileges to complete the operation.")
+                  errorMsg = "<em>users</em>" + 
                   //Add trailing . character if there's no permission issues with groups
-                  (values[1] == "Insufficient privileges to complete the operation." ? "" : ".");
+                  (values[1] === "Insufficient privileges to complete the operation." ? "" : 
+                    ". Your results will be limited to just groups.");
                 //Check if groups call had error
-                if (values[1] == "Insufficient privileges to complete the operation.") {
+                if (values[1] === "Insufficient privileges to complete the operation.") {
                   //Check if users message is already present
                   if (errorMsg)
-                    errorMsg += " and groups."
+                    errorMsg += " and <em>groups</em>."
                   else
-                    errorMsg = "groups."
+                    errorMsg = "<em>groups</em>. Your results will be limited to just users."
+                }
+                //Similar check for lack of approved Graph scopes due to none ever having been approved
+                //@ts-ignore (for startsWith)
+                if (typeof values[0] === "string" && values[0].startsWith("AADSTS65001:")) { //"AADSTS65001: The user or administrator has not consented to use the application with ID..."
+                  //hideDialog = false;
+                  errorMsg = "<em>users</em> and <em>groups</em>.";
                 }
 
                 if (errorMsg) {
-                  errorMsg = "The SharePoint Online admins for your tenant have not approved the permissions needed to search for " 
-                    + errorMsg;
-                  errorHeader = "Graph API permissions not approved";
+                  //const graphScopes = this.props.getGraphScopes();
+                  errorHeader = "Graph API searching permissions"; //had "not approved"
+                  errorMsg = "Your SharePoint tenant-level admins have not approved the permissions needed to <strong>search</strong> for " 
+                    + errorMsg;// + " To view the currently approved Graph API scopes, refer to the last page of the properties editing panel of this web part.";
                   errorSubMsg = "Please contact them (submit a ticket) and point them to the documentation links provided in the last page of the editing panel within this web part.";
-  
+                  
                   //Check if message should be displayed
                   const sessionVar = sessionStorage["TCWP-GraphPermsDirSearch"] as string;
-                  const now = new Date();
-                  if (sessionVar) {
-                    //Check if it's been over 12 hours
-                    if (((new Date(sessionVar)).getTime() - now.getTime()) / (1000*60*60) >= 12) {
-                      hideDialog = false;
-                      sessionStorage["TCWP-GraphPermsDirSearch"] = now.toISOString();
-                    }
-                  }
-                  else {
+                  if (!sessionVar) {
                     //No prior check in storage
                     hideDialog = false;
-                    sessionStorage["TCWP-GraphPermsDirSearch"] = now.toISOString();
+                    sessionStorage["TCWP-GraphPermsDirSearch"] = "Performed";
+                  }
+                }
+                else {
+                  //Check if some other error was returned (there may *not* be at this point)
+                  if (typeof values[0] === "string")
+                    errorSubMsg = values[0];
+                  if (typeof values[1] === "string" && values[0] !== values[1])
+                    if (errorSubMsg)
+                      errorSubMsg += " " + values[1];
+                    else
+                      errorSubMsg = values[1];
+                  
+                  //An error was returned
+                  if (errorSubMsg) {
+                    hideDialog = false;
+                    errorHeader = "Graph API error was encountered";
+                    errorMsg = "The following error was returned attempting to query the directory:";
                   }
                 }
               }
@@ -271,13 +291,38 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
           //this.state.recentlyUsed
         };
       
-        const onChange = (items: any[]): void => {  
+        //When a selection (or removal) is made
+        const onChange = (items: IPersonaProps[]): void => {  
           this.setState({
             selected: items
+            //directoryListing: null //could clear for some scenarios
           });
   
           if (this.props.onChange)
             this.props.onChange(items);
+
+          //Check for enough Graph permissions to query calendar & events
+          if (items.length > 0) {
+            if (items[0].personaType == "user") {
+              const graphScopes = this.props.getGraphScopes();
+              const correctScopes = graphScopes.filter((value:string) => value.indexOf("Calendars.Read") == 0 && value.indexOf("Calendars.ReadBasic") != 0);
+              if (correctScopes && correctScopes.length == 0) {
+                //Show error dialog (after short delay)
+                setTimeout(() => {
+                  let errorMsg = "Your SharePoint tenant-level admins have not approved the <strong>calendar</strong> permission needed to query user (and shared mailbox) <em>Outlook calendars</em> and their <em>event data</em>.";
+                    //+ "The currently approved Graph API scopes include: " + (graphScopes.length > 0 ? graphScopes.join(", ") : "None");
+                  
+                  //Show error dialog
+                  this.setState({
+                    hideMissingPermissionsDialog: false,
+                    graphPermissionsErrorHeader: "Graph API calendar permissions", //had "not approved"
+                    graphPermissionsError: errorMsg,
+                    graphPermissionsSubError: "Please contact them (submit a ticket) and point them to the documentation links provided in the last page of the editing panel within this web part."
+                  });
+                }, 800);
+              }
+            }
+          }
         }
 
         const onBeforeRenderItem = (props: IPeoplePickerItemSelectedProps) => { //IPickerItemProps<IPersonaProps>
@@ -286,7 +331,7 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
             item: {
               ...props.item,
               //@ts-ignore (for mail prop)
-              secondaryText: props.item.mail,
+              secondaryText: props.item.mail, //need to "override" here?
               //title: "Some specified title", to force a browser tooltip
               //ValidationState: ValidationState.valid, //doesn't seem to be needed
               showSecondaryText: true
@@ -300,7 +345,8 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
         return (
           <>
             <NormalPeoplePicker
-                //key?
+                //key={"peoplePicker" + (this.props.sortIdx || "0")}
+                onBlur={onBlur}
                 onResolveSuggestions={onInputChanged}
                 selectedItems={this.state.selected}
                 itemLimit={1}
@@ -309,7 +355,7 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                 pickerSuggestionsProps={suggestionProps}
                 className={'ms-PeoplePicker'}
                 removeButtonAriaLabel={'Remove'}
-                //onValidateInput={this.validateInput} //not applicable
+                //onValidateInput={this.validateInput} //Uncomment to allow any text input with enter key to "resolve" input
                 //onItemSelected={} ????
                 onRenderItem={onBeforeRenderItem} //adjust how selected items appear (show their email)
                 onChange={onChange}
@@ -325,7 +371,7 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
             />
             <Dialog
               hidden={this.state.hideMissingPermissionsDialog}
-              onDismiss={toggleHideMissingPermissionsDialog}
+              onDismiss={dismissMissingPermissionsDialog} //"Esc" key is pressed
               minWidth={415}
               maxWidth={415}
               dialogContentProps={{
@@ -338,11 +384,11 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                 //isModeless: true,
               }}
             >
-              <div>{this.state.graphPermissionsError}</div>
-              <div style={{marginTop: 20}}>{this.state.graphPermissionsSubError}</div>
+              <div dangerouslySetInnerHTML={{__html: this.state.graphPermissionsError}} />
+              <div style={{marginTop: 20}} dangerouslySetInnerHTML={{__html: this.state.graphPermissionsSubError}} />
               <DialogFooter>
-                {/* <PrimaryButton onClick={toggleHideMissingPermissionsDialog} text="Save" /> */}
-                <DefaultButton onClick={toggleHideMissingPermissionsDialog} text="OK" />
+                {/* <PrimaryButton onClick={dismissMissingPermissionsDialog} text="Save" /> */}
+                <DefaultButton onClick={dismissMissingPermissionsDialog} text="OK" />
               </DialogFooter>
             </Dialog>
           </>

@@ -17,7 +17,7 @@ import { PropertyFieldNumber } from '@pnp/spfx-property-controls/lib/PropertyFie
 import { PropertyFieldMonacoEditor } from '@pnp/spfx-property-controls/lib/PropertyFieldMonacoEditor';
 //import { MonacoEditor?? } from "@pnp/spfx-controls-react/lib/MonacoEditor??";
 import { PropertyPaneWebPartInformation } from '@pnp/spfx-property-controls/lib/PropertyPaneWebPartInformation';
-import { PropertyPaneMarkdownContent } from '@pnp/spfx-property-controls/lib/PropertyPaneMarkdownContent';
+//import { PropertyPaneMarkdownContent } from '@pnp/spfx-property-controls/lib/PropertyPaneMarkdownContent';
 import { PropertyFieldMessage } from '@pnp/spfx-property-controls/lib/PropertyFieldMessage';
 import { MessageBarType } from 'office-ui-fabric-react/lib/MessageBar';
 import PnPTelemetry from "@pnp/telemetry-js";
@@ -33,10 +33,10 @@ import DirectoryPicker from './components/DirectoryPicker';
 //These are the persisted web part properties
 export interface ITimelineCalendarWebPartProps {
   description: string;
-  groups: any[];
   categories: any[];
+  groups: any[];
   lists: any[];
-  calendars: any[];
+  calsAndPlans: any[];
   minDays: number;
   maxDays: number;
   initialStartDays: number;
@@ -64,9 +64,11 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     views: {} as any,
     fields: {} as any,
     memberOf: [] as IPersonaProps[],
-    calendars: {} as any
+    calendars: {} as any,
+    calFilterQuery: {} as any
   };
   private _graphClient: Promise<MSGraphClientV3> = null;
+  private _graphScopes: string[] = [];
   private _messageListener = (event:MessageEvent) => {
     //Look for only "local" events (ignoring OWA webshell messages: https://webshell.dodsuite.office365.us)
     if (event.origin === window.location.origin) {
@@ -82,7 +84,8 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
           views: {},
           fields: {},
           memberOf: this.dataCache.memberOf,
-          calendars: {}
+          calendars: {},
+          calFilterQuery: {}
         }
     }
   };
@@ -91,6 +94,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
   //But when page is *edited* it is fired again (displayMode == 2 in this case)
   //Also fired while already in edit mode and new web part is added (also mode #2)
   protected onInit(): Promise<void> {
+    //console.log("onInit, displayMode:" + this.displayMode.toString());
     if (this.displayMode == DisplayMode.Edit)
       window.addEventListener("message", this._messageListener, false);
 
@@ -183,6 +187,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
   //NOTE: This is fired even for property changes made in the properties pane! (props pane is this.displayMode == 2)
   //this.context (and .instanceId) is valid here
   public render(): void {
+    //console.log("render, displayMode:" + this.displayMode.toString());
     const element: React.ReactElement<ITimelineCalendarProps> = React.createElement(TimelineCalendar,
       {
         description: this.properties.description,
@@ -194,12 +199,14 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
         categories: this.properties.categories,
         groups: this.properties.groups,
         lists: this.properties.lists,
-        calendars: this.properties.calendars,
+        calsAndPlans: this.properties.calsAndPlans,
         //renderLegend: this.renderLegend.bind(this), //called from TSX, .bind needed otherwise "this" refers to the .tsx
         getDefaultTooltip: this.getDefaultTooltip.bind(this),
+        ensureValidClassName: this.ensureValidClassName.bind(this),
         buildDivStyles: this.buildDivStyles.bind(this),
         context: this.context,
         graphClient: this._graphClient,
+        getGraphScopes: this.getGraphScopes.bind(this),
         domElement: this.domElement,
         minDays: this.properties.minDays,
         maxDays: this.properties.maxDays,
@@ -232,6 +239,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
           //Handle errors
           if (error) {
             //Nothing needed
+            console.error(error);
           }
           //Handle a success response
           else {
@@ -249,7 +257,8 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
                   //imageInitials: '',
                   mail: value.mail,
                   text: value.displayName,
-                  secondaryText: value.visibility + " group", //TODO: Third visbility type of hiddenmembership (so show only Public or Private)
+                  //secondaryText: value.visibility + " group", //TODO: Third visbility type of hiddenmembership (so show only Public or Private)
+                  secondaryText: value.mail,
                   personaType: "group"
                 }
               });
@@ -276,7 +285,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
       if ((oldValue == null || oldValue.length == 0) && (newValue && newValue.length > 0) && this.properties.lists) {
         const categoryId = (this.properties.groups[0] as IGroupItem).uniqueId; //get id for first group
         this.properties.lists.forEach((list: IListItem) => {
-          list.groupId = categoryId;
+          list.group = "Static:" + categoryId;
         })
       }
     }
@@ -341,8 +350,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
   protected onDispose(): void {
     ReactDom.unmountComponentAtNode(this.domElement);
 
-    console.log("onDispose, dispMode:" + this.displayMode.toString());
-
+    //console.log("onDispose, displayMode:" + this.displayMode.toString());
     if (this.displayMode == DisplayMode.Edit)
       //Remove event listener
       window.removeEventListener("message", this._messageListener, false);
@@ -379,6 +387,31 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
 </div>`;
   }
 
+  private ensureValidClassName(className:string | []): string {
+    if (className == null || className.length == 0)
+      return null; //or "" or cal.className ???
+
+    if (Array.isArray(className))
+      className = (className as []).join(", ");
+
+    className = (className as string); //just for TypeScript compiling
+
+    //Calculated fields add extra content, remove it
+    if (className.indexOf(";#") != -1) { //ex: string;#CalculatedValueHere
+      const index = className.indexOf(";#");
+      className = className.substring(index+2);
+    }
+    
+    //Ensure valid CSS classes (no spaces, reserved characters, etc.)
+    className = className.replace(/\W/g, "");
+    
+    //Check if class starts with a number, which isn't valid
+    if (isNaN(Number(className.charAt(0))) == false)
+      //className = TC.settings.numCssClassPrepend + className;
+      className = "Prepend" + className;
+    return className;
+  }
+
   private buildDivStyles(categoryItem:ICategoryItem): any {
     const defaultStyle = "border-color:" + categoryItem.borderColor + "; color:" + categoryItem.textColor + ";" + 
       (categoryItem.bgColor ? " background-color:" + categoryItem.bgColor + ";" : "");
@@ -396,6 +429,50 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
       return defaultStyle;
   }
 
+  private getGraphScopes(returnError?:boolean): string[] {
+    //Look for and save Graph scope information
+    for (const key in sessionStorage) {
+      //@ts-ignore (for startsWith)
+      if (key && typeof key == "string" && key.startsWith('{"authority":')) {
+        try {
+          const keyObj = JSON.parse(key);
+          //Find the correct Graph results entry
+          //TODO: Look for the SPO client app specifically (decode the JWT)
+          if (keyObj.scopes && keyObj.scopes.indexOf('profile openid') != -1) {
+            const scopes = keyObj.scopes.split(" ");
+            //Change "https://[dod-]graph.microsoft.[com/us]/User.Read" value to instead just get "User.Read" portion
+            this._graphScopes = scopes.map((value:string, i:Number) => {
+              if (value.indexOf('graph.microsoft.') != -1)
+                return value.split("/")[3];
+              else
+                return value;
+            //Remove the "profile", "openid", "email", and ".default" scopes
+            }).filter((value:string) => {
+              switch (value) {
+                case "profile":
+                case "openid":
+                case "email":
+                case ".default": //this one has the Graph URL prepended to it, which is why this .filter is after .map
+                  return false;
+                
+                default:
+                  return true;
+              }
+            });
+          }
+        }
+        catch (e) {}
+      }
+    }
+
+    //If returnError specified, return the error details if there were no scopes found
+    if ((this._graphScopes == null || this._graphScopes.length == 0) && returnError 
+          && sessionStorage["msal.error.description"])
+      this._graphScopes = [sessionStorage["msal.error.description"]];
+
+    return this._graphScopes;
+  }
+
   //Fired each time property pane is opened (initial and close-open actions)
   //Also fired after render() after property pane properties are saved/changed
   protected getPropertyPaneConfiguration(): IPropertyPaneConfiguration {
@@ -405,14 +482,14 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     const self = this;
 
     //MarkDown for web part information (make sure to remove left indentation/spaces)
-    const webpartMD = `**Web Part Version**
+    /*const webpartMD = `**Web Part Version**
 
 ${this && this.manifest.version ? this.manifest.version : '*Unknown*'}
 
 **Web Part Instance ID**
 
 ${this.instanceId}
-`;
+`;*/
 
     //Return the PropertyPane config
     return {
@@ -499,7 +576,7 @@ ${this.instanceId}
                         return '';
                       },
                     },
-                    {
+                    /*{
                       id: "fixColors",
                       title: "fixColors",
                       isVisible: (field, items) => {
@@ -539,7 +616,7 @@ ${this.instanceId}
                           return React.createElement("span", {class: 'legendBox vis-item vis-range', style: divStyles}, item.name);
                         }
                       }
-                    },
+                    },*/
                     {
                       id: "visible",
                       title: "Visible",
@@ -595,7 +672,23 @@ ${this.instanceId}
                       title: "CSS Class",
                       type: CustomCollectionFieldType.string,
                       required: false,
-                      placeholder: " " //need a space because blank just shows the title
+                      placeholder: " ", //need a space because blank just shows the title
+                      //deferredValidationTime: 1000,
+                      //Oddly named: This is really the "perform field validation" function
+                      onGetErrorMessage: (value: string, index: number, item: IGroupItem) => {
+                        //NOTE: "this" is just the field object
+                        //Fired after deferredValidationTime
+                        
+                        //Handle blank and cleared-out values
+                        if (value == null || value.trim() == '') {
+                          //Nothing
+                        } else
+                          //Force into a valid CSS class name
+                          item.className = self.ensureValidClassName(value);
+                        
+                        //Always return, or Save button is disabled
+                        return ''; //no validation error; '' lets default checks happen
+                      }
                     },
                     {
                       id: "visible",
@@ -625,7 +718,12 @@ ${this.instanceId}
                       }
                     }
                   ],
-                }),
+                })
+              ]
+            },
+            {
+              groupName: "Data Source Settings",
+              groupFields: [
                 PropertyFieldCollectionData("lists", {
                   key: "lists",
                   value: this.properties.lists,
@@ -1307,7 +1405,8 @@ ${this.instanceId}
                                            field.TypeAsString == "User")))
                                       promiseData.push({
                                         key: field.InternalName,
-                                        text: field.Title
+                                        text: field.Title,
+                                        title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                       });
                                   });
 
@@ -1361,7 +1460,8 @@ ${this.instanceId}
                                       if (field.TypeAsString == "DateTime")
                                         promiseData.push({
                                           key: field.InternalName,
-                                          text: field.Title
+                                          text: field.Title,
+                                          title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                         });
                                     });
 
@@ -1415,7 +1515,8 @@ ${this.instanceId}
                                       if (field.TypeAsString == "DateTime")
                                         promiseData.push({
                                           key: field.InternalName,
-                                          text: field.Title
+                                          text: field.Title,
+                                          title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                         });
                                     });
 
@@ -1446,11 +1547,11 @@ ${this.instanceId}
                             stateKey: item.list,
                             onChange: (event:Event, option: IDropdownOption) => {
                               if (option == null || (option != null && option.key == "")) {
-                                //Clear related values
-                                if (item.classField)
-                                  item.classField = null;
-                                if (item.className)
-                                  item.className = null;
+                                //Clear related values (TODO: do this elsewhere)
+                                // if (item.classField)
+                                //   item.classField = null;
+                                // if (item.className)
+                                //   item.className = null;
                                 onUpdate(field.id, null);
                               }
                               else
@@ -1478,14 +1579,19 @@ ${this.instanceId}
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add applicable fields
-                                      // if (field.FieldTypeKind != 0 && (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || 
-                                      //       field.TypeAsString == "Lookup"|| field.TypeAsString == "Calculated"))
+                                      // if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
+                                      //      (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "Lookup" || 
+                                      //         field.TypeAsString == "User")))
                                       if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
-                                           (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "Lookup" || 
-                                              field.TypeAsString == "User")))
+                                        (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "MultiChoice" || 
+                                          field.TypeAsString == "Lookup" || field.TypeAsString == "LookupMulti" ||
+                                          //OutcomeChoice is "Task Outcome in the classic UI"
+                                          field.TypeAsString == "OutcomeChoice" || field.TypeAsString == "User" || field.TypeAsString == "UserMulti" ||
+                                          field.TypeAsString == "TaxonomyFieldType" || field.TypeAsString == "TaxonomyFieldTypeMulti")))
                                         promiseData.push({
                                           key: "Field:" + field.InternalName,
-                                          text: field.Title
+                                          text: field.Title,
+                                          title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                         });
                                     });
 
@@ -1563,8 +1669,6 @@ ${this.instanceId}
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add applicable fields
-                                      // if (field.FieldTypeKind != 0 && (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || 
-                                      //       field.TypeAsString == "Lookup"|| field.TypeAsString == "Calculated"))
                                       if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
                                            (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "MultiChoice" || 
                                             field.TypeAsString == "Lookup" || field.TypeAsString == "LookupMulti" ||
@@ -1573,7 +1677,8 @@ ${this.instanceId}
                                             field.TypeAsString == "TaxonomyFieldType" || field.TypeAsString == "TaxonomyFieldTypeMulti")))
                                         promiseData.push({
                                           key: "Field:" + field.InternalName,
-                                          text: field.Title
+                                          text: field.Title,
+                                          title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                         });
                                     });
 
@@ -1691,9 +1796,9 @@ ${this.instanceId}
                     }
                   ]
                 }),
-                PropertyFieldCollectionData("calendars", {
-                  key: "calendars",
-                  value: this.properties.calendars,
+                PropertyFieldCollectionData("calsAndPlans", {
+                  key: "calsAndPlans",
+                  value: this.properties.calsAndPlans,
                   tableClassName: "calendarsFCDTable",
                   label: "Outlook Calendars", //Header/label above the button
                   manageBtnLabel: "Add/Edit Calendars",
@@ -1721,6 +1826,7 @@ ${this.instanceId}
                             selectedPersonas: value,
                             initialSuggestions: this.dataCache.memberOf,
                             graphClient: this._graphClient,
+                            getGraphScopes: this.getGraphScopes.bind(this),
                             onChange: (items:IPersonaProps[]) => {
                               if (items.length == 0) {
                                 //neither helped
@@ -1744,7 +1850,7 @@ ${this.instanceId}
                       }
                     },
                     {
-                      id: "calendar",  
+                      id: "resource",  
                       title: "Calendar",
                       required: true,
                       type: CustomCollectionFieldType.custom,
@@ -1782,7 +1888,7 @@ ${this.instanceId}
                                       }
                                     })
                                     .catch(reason => { //reason is undefined
-                                      //Just catch to prevent "Uncaught in promise" console error
+                                      //Just catch to prevent "Uncaught (in promise)" console error
                                     })
                                   });
                               }
@@ -1802,17 +1908,20 @@ ${this.instanceId}
                                 return self.dataCache.calendars[personaId];
                               }
 
-                              //For groups just return a "default" calendar (since there cannot be other, created calendars like with users)
+                              //For groups just return a "default" calendar (since there cannot be other "created" calendars like with users)
                               if (persona.personaType == "group") {
                                 //Just "return" this simple promise
                                 return new Promise<IDropdownOption[]>((resolve, reject) => {
                                   let promiseData:IDropdownOption[] = [];
                                   promiseData.push({
-                                    key: "default",
+                                    key: "calendar:default",
                                     text: "Calendar"
                                   });
                                   resolve(promiseData);
                                 });
+
+                                //TODO: Query for Planner plans
+                                //key: plan:{id}
                               }
 
                               //For users, query to see which calendars are available/shared
@@ -1823,6 +1932,10 @@ ${this.instanceId}
                                   client.api("/users/" + persona.key + "/calendars").select("id,name,isDefaultCalendar,owner")
                                   .get((error:GraphError, response:any, rawResponse?:any) => {
                                     if (error) {
+                                      //When Calendars.Read[.*] Graph scope is not approved...
+                                      //code: "ErrorAccessDenied"
+                                      //message: "Access is denied. Check credentials and try again."
+
                                       //Reset the promise cache in case of temp issue
                                       self.dataCache.calendars[personaId] = null;
                                       
@@ -1855,7 +1968,7 @@ ${this.instanceId}
                                         //Ignore these known calendars also in case the person selects themself
                                         if (calendar.name != "United States holidays" && calendar.name != "Birthdays")
                                           promiseData.push({
-                                            key: calendar.id,
+                                            key: "calendar:" + calendar.id,
                                             text: calendar.name
                                           });
                                       });
@@ -1864,7 +1977,7 @@ ${this.instanceId}
                                     }
                                   })
                                   .catch(reason => { //even with no reject above, this is undefined
-                                    onCustomFieldValidation(field.id, errorMsg); //works!
+                                    onCustomFieldValidation(field.id, errorMsg);
                                   })
 
                                   /* None of these worked
@@ -1916,7 +2029,7 @@ ${this.instanceId}
                               //Providing no value
                               // calendarsPromise.catch(reason => {
                               //   console.log(reason); //has access to reject msg
-                              //   onCustomFieldValidation(field.id, "bottom catch"); //not shown (because Uncaught in promise error or get catch message shown instead)
+                              //   onCustomFieldValidation(field.id, "bottom catch"); //not shown (because Uncaught (in promise) error or get catch message shown instead)
                               // });
 
                               //Store promise in cache and return
@@ -1938,11 +2051,63 @@ ${this.instanceId}
                           return false;
                       },*/
                       disable: (item:ICalendarItem):boolean => {
-                        return (item.persona == null || item.persona.length == 0 ? true : false);
+                        return (item.persona == null || item.persona.length == 0 || item.resource == null ? true : false);
                       },
                       placeholder: " ", //need a space because blank just shows the title
                       type: CustomCollectionFieldType.string,
-                      required: false
+                      required: false,
+                      deferredValidationTime: 1000,
+                      //Oddly named: This is really the "perform field validation" function
+                      onGetErrorMessage: (value: string, index: number, item: ICalendarItem) => {
+                        //NOTE: "this" is just the field object
+                        //Fired after deferredValidationTime
+
+                        //Handle blank and cleared-out values
+                        if (value == null || value.trim() == '')
+                          return ''; //no validation error; '' lets default checks happen
+
+                        //Look for existing check and return it's promise
+                        if (self.dataCache.calFilterQuery[value])
+                          return self.dataCache.calFilterQuery[value]
+
+                        //Try a calendar Graph call to test if query is valid
+                        const promise = new Promise<string>((resolve, reject) => {
+                          this._graphClient.then((client:MSGraphClientV3): void => {
+                            //Build API URL based on user or group calendar
+                            let apiURL = "";
+                            let resourceId = item.resource.split(":")[1]; //format "calendar:id"
+                            if (item.persona[0].personaType == "user")
+                              apiURL = "/users/" + item.persona[0].mail + "/calendars/" + resourceId + "/calendarView";
+                            else //assumed to be a group
+                              apiURL = "/groups/" + item.persona[0].key + "/calendarView";
+
+                            const now = new Date();
+                            let later = new Date();
+                            later.setDate(later.getDate() + 1);
+                            
+                            //Get sample calender view events just to test the input query
+                            //return client.api(apiURL).query(`startDateTime=${this.getMinDate().toISOString()}&endDateTime=${this.getMaxDate().toISOString()}`)
+                            client.api(apiURL).query(`startDateTime=${now.toISOString()}&endDateTime=${later.toISOString()}`)
+                            .select("id,subject").top(1)
+                            .filter(value.trim())
+                            .get((error:GraphError, response:any, rawResponse?:any) => {
+                              if (error) {
+                                resolve(error.message);
+                              }
+                              else {
+                                resolve(''); //no validation error
+                              }
+                            })
+                            .catch(reason => { //reason is undefined
+                              //Just catch to prevent "Uncaught (in promise)" console error
+                            });
+                          });
+                        });
+
+                        //Store the promise in cache and return
+                        self.dataCache.calFilterQuery[value] = promise;
+                        return promise;
+                      }
                     },
                     {
                       id: "category",
@@ -1967,7 +2132,8 @@ ${this.instanceId}
                           //Add fields from Outlook events
                           { key: "Field:categories", text: "Categories" },
                           { key: "Field:showAs", text: "Show As" },
-                          { key: "Field:charm", text: "Charm/Icon" },
+                          { key: "Field:charmIcon", text: "Charm/Icon" },
+
                           //Add static header
                           {
                             key: "staticHeader",
@@ -2023,7 +2189,8 @@ ${this.instanceId}
                           //Add fields from Outlook events
                           { key: "Field:categories", text: "Categories" },
                           { key: "Field:showAs", text: "Show As" },
-                          { key: "Field:charm", text: "Charm/Icon" },
+                          { key: "Field:charmIcon", text: "Charm/Icon" },
+                          
                           //Add static header
                           {
                             key: "staticHeader",
@@ -2031,13 +2198,6 @@ ${this.instanceId}
                             itemType: DropdownMenuItemType.Header
                           }
                         ];
-
-                        //Add static header
-                        /*options.push({
-                          key: "staticHeader",
-                          text: "Static Row/Swimlane",
-                          itemType: DropdownMenuItemType.Header
-                        });*/
 
                         //Add rows/swimlanes to dropdown
                         if (this.properties.groups && this.properties.groups.length > 0)
@@ -2067,18 +2227,6 @@ ${this.instanceId}
                         return options;
                       }
                     },
-                    // {
-                    //   id: "ignorePrivate",
-                    //   title: "Ignore Private Events",
-                    //   type: CustomCollectionFieldType.boolean,
-                    //   defaultValue: true,
-                    // },
-                    // {
-                    //   id: "visible",
-                    //   title: "Visible",
-                    //   type: CustomCollectionFieldType.boolean,
-                    //   defaultValue: true,
-                    // }
                     {
                       id: "configs",  
                       title: "Advanced Configs",
@@ -2286,14 +2434,11 @@ ${this.instanceId}
             {
               groupName: "About",
               groupFields: [
-                PropertyPaneMarkdownContent({
-                  markdown: `**Reference & Support**
-
-Use the following links to access documentation and support as well as to report any issues or to submit an idea for a new feature.`,
-//[milBook Group/Project (DoD CAC-login)](https://www.milsuite.mil/book/groups/m365-support/projects/timeline-calendar/)
-//
-//[GitHub Repository (public access)](https://github.com/spsprinkles/timeline-calendar/)`,
-                  key: "supportInfo"
+                PropertyPaneWebPartInformation({
+                  //No margin-top style needed
+                  description: `<div style="margin-bottom:5px"><b>Reference & Support</b></div>
+                    <div style="margin-bottom:5px">Use the following links to access documentation and support as well as to report any issues or to submit an idea for a new feature.</div>`,
+                  key: 'supportInfo'
                 }),
                 PropertyPaneLink('',{
                   target: '_blank',
@@ -2305,14 +2450,26 @@ Use the following links to access documentation and support as well as to report
                   href: "https://github.com/spsprinkles/timeline-calendar/",
                   text: "GitHub Repository (public access)"
                 }),
-                PropertyPaneMarkdownContent({
-                  markdown: webpartMD,
-                  key: "webpartInfo"
+                // PropertyPaneMarkdownContent({
+                //   markdown: webpartMD,
+                //   key: "webpartInfo"
+                // }),
+                PropertyPaneWebPartInformation({
+                  description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Version</b></div>
+                    <div>${this && this.manifest.version ? this.manifest.version : '*Unknown*'}</div>
+                    <div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Instance ID</b></div>
+                    <div>${this.instanceId}</div>`,
+                  key: 'wpInfo'
                 }),
                 PropertyPaneWebPartInformation({
-                  description: `<div><b>Author</b></div>
+                  description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Author</b></div>
                     <div>Michael Vasiloff <a href="https://www.linkedin.com/in/michaelvasiloff" target="_blank">[LinkedIn]</a> <a href="https://github.com/mikevasiloff" target="_blank">[GitHub]</a> <a href="https://www.milsuite.mil/book/people/michael.d.vasiloff" target="_blank">[milBook]</a></div>`,
                   key: 'authors'
+                }),
+                PropertyPaneWebPartInformation({
+                  description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Graph API Scopes (Tenant Approved)</b></div>
+                    <div>${this.getGraphScopes(true).join(", ")}</div>`,
+                  key: 'graphScopes'
                 })
               ]
             }
