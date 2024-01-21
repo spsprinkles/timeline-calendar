@@ -14,8 +14,15 @@ import {SPHttpClient, SPHttpClientResponse} from '@microsoft/sp-http';
 import { IFrameDialog, IFrameDialogProps } from "@pnp/spfx-controls-react/lib/IFrameDialog";
 import { DialogType } from 'office-ui-fabric-react/lib/Dialog';
 //import { SPComponentLoader } from '@microsoft/sp-loader';
-import { ICategoryItem, IGroupItem, IListItem } from './IConfigurationItems';
+import { ICalendarConfigs, ICalendarItem, ICategoryItem, IGroupItem, IListConfigs, IListItem } from './IConfigurationItems';
 import * as Handlebars from 'handlebars';
+import { MSGraphClientV3 } from '@microsoft/sp-http';
+import { GraphError } from '@microsoft/microsoft-graph-client'; //ResponseType
+import * as MicrosoftGraph from '@microsoft/microsoft-graph-types';
+//import { DescriptionFieldLabel } from 'TimelineCalendarWebPartStrings';
+//import { Dialog, DialogType, DialogFooter } from '@fluentui/react/lib/Dialog';
+//import { DefaultButton } from '@fluentui/react/lib/Button'; //PrimaryButton
+//import { TeachingBubbleContentBase } from 'office-ui-fabric-react';
 
 //declare const window: any; //temp TODO
 
@@ -28,11 +35,10 @@ class IdSvc {
   //private constructor() {}
 }
 
-// class Dispatcher {
-//   private numOfCompletions = 0;
-//   private warnings: string;
-//   private errors: string;
-// }
+interface IItemDateInfo {
+  eventStartDate: Date
+  eventEndDate?: Date
+}
 
 export default class TimelineCalendar extends React.Component<ITimelineCalendarProps, {}> {
   private _timeline: Timeline;
@@ -151,12 +157,12 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //Update existing, applicable events type to "background"
       const itemEvents = this._dsItems.get({
         filter: function (item:any) {
-          if (prevProps.holidayCategories != null && prevProps.holidayCategories != "" && item.className == self.ensureValidClassName(prevProps.holidayCategories)) {
+          if (prevProps.holidayCategories != null && prevProps.holidayCategories != "" && item.className == self.props.ensureValidClassName(prevProps.holidayCategories)) {
             item.type = "range"; //assume it should be reverted to range (vs. point)
             item.group = groupId;
             return true;
           }
-          else if (item.className == self.ensureValidClassName(self.props.holidayCategories)) {
+          else if (item.className == self.props.ensureValidClassName(self.props.holidayCategories)) {
             item.type = "background"; //change to background
             item.group = null; //ensure holiday covers all groups
             return true;
@@ -197,7 +203,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         filter: (item:any) => {
           if (item.type != "background") { //ignore weekend and special holiday events
             //Was checking (item.start.toISOString().substring(0, 10) == item.end.toISOString().substring(0, 10)), but the ISO time zone threw off some events
-            if (this.props.singleDayAsPoint && (item.end == null || item.start.toLocaleDateString() == item.end.toLocaleDateString())) //localDate == "11/27/2023"
+            if (this.props.singleDayAsPoint && (item.end == null || item.start.toLocaleDateString() === item.end.toLocaleDateString())) //localDate == "11/27/2023"
               item.type = "point";
             else
               item.type = "range";
@@ -352,6 +358,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     //document.querySelector('div[data-automation-id="contentScrollRegion"]').scrollTop == 0, not scrolled
   }
 
+  //TODO: Rename since it's used for REST response data also - ISO format
   private formatDateFromSOAP(d:string):Date {//"2014-08-28 23:59:00" or if UTC "2019-12-13T05:00:00Z"
     if (d == null)
 			return null;
@@ -361,26 +368,6 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 			return new Date(d);
 		else
 			return new Date(d.replace(" ", "T")); //needed for IE
-  }
-
-  private ensureValidClassName(className:string): string {
-    if (className == null)
-      return null; //or "" or cal.className ???
-
-    //Calculated fields add extra content, remove it
-    if (className.indexOf(";#") != -1) { //ex: string;#CalculatedValueHere
-      const index = className.indexOf(";#");
-      className = className.substring(index+2);
-    }
-    
-    //Ensure valid CSS classes (no spaces, reserved characters, etc.)
-    className = className.replace(/\W/g, "");
-    
-    //Check if class starts with a number, which isn't valid
-    if (isNaN(Number(className.charAt(0))) == false)
-      //className = TC.settings.numCssClassPrepend + className;
-      className = "Prepend" + className;
-    return className;
   }
 
   private options: any = { //TimelineOptions
@@ -449,7 +436,6 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   private getMinDate(): Date {
     //Build dates for min/max data querying; default 2 months before today
     let minDate = new Date();
-    //minDate.setMonth(minDate.getMonth() - 2);
     minDate.setDate(minDate.getDate() - (this.props.minDays || 60));
     return minDate;
   }
@@ -516,16 +502,413 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     //Add click handler for events
     this._timeline.on("select", (props) => {
       if (props.items.length > 0 && props.event.type == "tap") { //ignore the follow-on "press" event (still needed?)
-				const oEvent = this._dsItems.get(props.items[0]);
+				//Get the clicked on item object
+        const oEvent = this._dsItems.get(props.items[0]);
+        //Handle SP items
         if (oEvent.encodedAbsUrl) {
+          //Check for updates/deletion to item
+          const checkSPOItem = () => {
+            //TODO: Edits to series/recurring events with IDs like "16.0.2020-06-08T16:00:00Z" actually have a different ID generated by the SP form action
+            /*
+              SP item ID 6 created with recurrence pattern (fRecurrence & RecurrenceData fields)
+              Instances of it's recurring events share the same EncodedAbsUrl '{site}/Lists/Calendar/6_.000'
+              But each has it's own ID value: ID='6.0.2024-02-07T13:00:00Z'
+                                              ID='6.0.2024-03-06T13:00:00Z'
+            */
+            if (oEvent.spId.toString().includes("T")) //or "-" or "Z"
+					    return; //skip
+
+            const source = (oEvent.sourceObj as IListItem);
+            const listConfigs = this.buildListConfigs(source);
+            const fieldKeys = this.getFieldKeys();
+
+            /* REST approach
+            //TODO: Use the fieldKeys to get (and update) all relevant props
+            //TODO: Add fAllDayEvent for calendar lists
+            //TODO: Add encodedAbsUrl and others?
+            const selectFields = "ID," + source.titleField + (source.isCalendar ? ",fAllDayEvent" : "");
+              //(source.startDateField ? "," + source.startDateField + ",FieldValuesAsText/" + source.startDateField : "") + 
+              //(source.endDateField ? "," + source.endDateField + ",FieldValuesAsText/" + source.endDateField : "");
+
+            //Query for item
+            this.props.context.spHttpClient.get(source.siteUrl + 
+              //Previously had &$expand=FieldValuesAsText
+              //Needed to expand user fields: select=*,Author/Title,Editor/Title&$expand=Author,Editor
+              `/_api/web/lists/getById('${source.list}')/items?$filter=Id eq ${oEvent.spId}&$select=${selectFields}`, SPHttpClient.configurations.v1)
+            .then((response: SPHttpClientResponse) => {
+              if (response.ok) {
+                response.json().then((data:any) => {
+                  if (data && data.value && data.value.length > 0) {
+                    const item = data.value[0];
+                    const updatedEvent = this.buildSPOItemObject(source, listConfigs, fieldKeys, item, oEvent.id);
+
+                    //Add group (row/swimlane)
+                    let multipleValuesFound = false;
+                    if (listConfigs.groupId)
+                      oEvent.group = listConfigs.groupId;
+                    else if (listConfigs.groupField && this.props.groups) {
+                      //Find the associated group to assign the item to
+                      //ORIG: let groupFieldValue = elem.getAttribute("ows_" + listConfigs.groupField);
+                      let groupFieldValue = item[listConfigs.groupField];
+                      if (groupFieldValue) {
+                        //ORIG: const groupSplit = this.handleMultiValues(groupFieldValue);
+                        console.log(groupFieldValue); //TODO: check on object properties for lookups, users, etc.
+                        const groupSplit: string[] = ["Test"];
+
+                        //Look for "regular" values without ;# (they result in ["Single value"] array)
+                        if (groupSplit.length == 1) {
+                          groupFieldValue = groupSplit[0];
+                        }
+                        else {
+                          //More than one, *real* value is in the field
+                          multipleValuesFound = true;
+
+                          //TODO: FIND any duplicate events and remove them
+
+                          // //Create a duplicate event for each selected group value
+                          // groupSplit.forEach(groupName => {
+                          //   const eventClone = structuredClone(oEvent);
+                          //   //Above duplicates the event object
+                          //   eventClone.id = IdSvc.getNext(); //Set a new ID
+
+                          //   //Find the associated group from it's name
+                          //   this.props.groups.every((group:IGroupItem) => {
+                          //     if (group.name == groupName) {
+                          //       eventClone.group = group.uniqueId;
+                          //       return false; //exit
+                          //     }
+                          //     else return true; //keep looping
+                          //   });
+
+                          //   //Add the clone to the DataSet
+                          //   this._dsItems.add(eventClone);
+                          // });
+                        }
+
+                        //Finalize single value events
+                        if (multipleValuesFound == false) {
+                          //Find the associated group from it's name
+                          this.props.groups.every((group:IGroupItem) => {
+                            if (group.name == groupFieldValue) {
+                              oEvent.group = group.uniqueId;
+                              return false; //exit
+                            }
+                            else return true; //keep looping
+                          });
+                        }
+                      } //There is a groupFieldValue
+                    } //A groupField was selected && there are this.props.groups
+
+                    //Update the event
+                    this._dsItems.update(updatedEvent);
+                  }
+                  else //Remove the item, it's been deleted
+                    this._dsItems.remove(props.items[0]);
+                });
+              }
+              else {
+                //const statusCode = response.status;
+                //const statusMessage = response.statusMessage; //May not exist?
+                response.json().then(data => {
+                  console.log(data);
+                })
+                .catch (error => {
+                  //console.log("status: " + statusCode.toString() + " / " + statusNum.toString());
+                  //reject("Error HTTP: " + response.status.toString() + " " + response.statusText);
+                });
+              }
+            })
+            .catch(error => {
+              //console.log(error);
+              //.message: "Unexpected end of JSON input"
+              //.stack: "SyntaxError: Unexpected end of JSON input\n    at e.json..."
+            });
+            */
+
+            //Use SOAP instead for easier handling of fields that might not exist (user inputted ones in the tooltip)
+            let soapEnvelop = "<soapenv:Envelope xmlns:soapenv='http://schemas.xmlsoap.org/soap/envelope/'><soapenv:Body><GetListItems xmlns='http://schemas.microsoft.com/sharepoint/soap/'>" + 
+              "<listName>" + source.list + "</listName>" + 
+              "<viewFields><ViewFields>" + 
+                //"<FieldRef Name='Title' />" + 
+                (source.titleField ? "<FieldRef Name='" + source.titleField + "' />" : "") +
+                //"<FieldRef Name='Location' />" + 
+                "<FieldRef Name='EventDate' />" +
+                "<FieldRef Name='EndDate' />" + 
+                (source.isCalendar ? "<FieldRef Name='fRecurrence' />" : "") + 
+                //(includeRecurrence ? "<FieldRef Name='RecurrenceData' />" : "") + 
+                "<FieldRef Name='EncodedAbsUrl' />" +
+                //fAllDayEvent seems to be included by default
+                (listConfigs.classField ? "<FieldRef Name='" + listConfigs.classField + "' />" : "") +
+                (listConfigs.groupField ? "<FieldRef Name='" + listConfigs.groupField + "' />" : "");
+
+            //Add fields used in the tooltip
+            fieldKeys.forEach(field => {
+              soapEnvelop += "<FieldRef Name='" + field + "' />";
+            });
+            
+            //Add date fields
+            if (source.startDateField)
+              soapEnvelop += "<FieldRef Name='" + source.startDateField + "' />";
+            if (source.endDateField)
+              soapEnvelop += "<FieldRef Name='" + source.endDateField + "' />";
+            
+            soapEnvelop += "</ViewFields></viewFields>" + 
+              //Set rowLimit, without this the default is only 30 items
+              //"<rowLimit>1000</rowLimit>"; //Setting as 0 initially *seemed* to get all events but SP would stop at a seemingly random point
+              //Even with setting this to 5000 SP only returns 999 events and requires you to use pagination for next batch of events
+              "<query><Query><Where>" +
+                "<Eq><FieldRef Name='ID'/><Value Type='Computed'>" + oEvent.spId.toString() + "</Value></Eq>" +
+              "</Where></Query></query><queryOptions><QueryOptions>" + 
+                //(includeRecurrence ? "<RecurrencePatternXMLVersion>v3</RecurrencePatternXMLVersion>" : "") + 
+                //(includeRecurrence ? "<ExpandRecurrence>TRUE</ExpandRecurrence>" : "") + 
+                //(includeRecurrence ? "<RecurrenceOrderBy>TRUE</RecurrenceOrderBy>" : "") +
+                "<ViewAttributes Scope='RecursiveAll' />" +
+                //"<IncludeMandatoryColumns>FALSE</IncludeMandatoryColumns>" +
+                "<ViewFieldsOnly>TRUE</ViewFieldsOnly>" +
+                (listConfigs.dateInUtc == false ? "" : "<DateInUtc>TRUE</DateInUtc>") + //True returns dates as "2023-10-10T06:00:00Z" versus "2023-10-10 08:00:00"
+              "</QueryOptions></queryOptions></GetListItems></soapenv:Body></soapenv:Envelope>";
+
+            //Perform the query
+            this.props.context.spHttpClient.post(source.siteUrl + "/_vti_bin/lists.asmx", SPHttpClient.configurations.v1,
+            {
+              headers: [
+                ["Accept", "application/xml, text/xml, */*; q=0.01"],
+                ["Content-Type", 'text/xml; charset="UTF-8"']
+              ],
+              body: soapEnvelop
+            }).then((response: SPHttpClientResponse) => response.text())
+            .then((strXml: any) => {
+              // //Check for problems such as access denied to the site/web object
+              // //They won't have an rs:data element with ItemCount attribute
+              // if ($(jqxhr.responseXML).SPFilterNode("rs:data").attr("ItemCount") == null) {
+              //   var strError = cal.listName + " returned invalid response";
+              //     var isWarning = false;
+              //     var isError = false;
+              //     if (jqxhr.responseXML) {
+              //         var msg = ($("title", jqxhr.responseXML).text() || "").trim();
+              //         if (msg == "Access required") {
+              //           isWarning = true;
+              //           strError += ": Could not access site: " + cal.siteUrl;
+              //         }
+              //         else {
+              //           strError += ": " + ($("h1.ms-core-pageTitle", jqxhr.responseXML).text() || "").trim();
+              //           isError = true;
+              //         }
+              //     }
+              //     else
+              //       isError = true;
+              //     TC.log(strError);
+              //     dispatcher.queryCompleted(cal, isWarning, isError);
+                  
+              //   return; //don't proceed with the below
+              // }
+              
+              //At this point we should have a valid list response
+              const parser = new DOMParser();
+              const xmlDoc = parser.parseFromString(strXml, "application/xml");
+              xmlDoc.querySelectorAll("*").forEach(elem => {
+                //Result when error happens: nodeName == "parsererror"
+
+                if (elem.nodeName == "rs:data") {
+                  if (elem.getAttribute("ItemCount") === "0")
+                    //Remove the item, it's been deleted
+                    this._dsItems.remove(props.items[0]);
+                }
+                else if (elem.nodeName == "z:row") { //actual data is here
+                  //const itemDateInfo = this.getSPItemDates(source, listConfigs, elem);
+                  const updatedEvent = this.buildSPOItemObject(source, listConfigs, fieldKeys, elem, oEvent.id);
+
+                  //Add group (row/swimlane)
+                  let multipleValuesFound = false;
+                  if (listConfigs.groupId)
+                    updatedEvent.group = listConfigs.groupId;
+                  else if (listConfigs.groupField && this.props.groups) {
+                    //Find the associated group to assign the item to
+                    let groupFieldValue = elem.getAttribute("ows_" + listConfigs.groupField);
+                    if (groupFieldValue) {
+                      const groupSplit = this.handleMultipleSOAPValues(groupFieldValue);
+                      
+                      //OLD
+                      // //Look for "regular" values without ;# (they result in ["Single value"] array)
+                      // if (groupSplit.length == 1) {
+                      //   groupFieldValue = groupSplit[0];
+                      // }
+                      // else {
+                      
+                      //Now need to assume that there *could* have been multiple selections previously
+                      //but the item was updated to only have one (we need to remove those prior copies)
+
+                      //More than one, *real* value is in the field
+                      multipleValuesFound = true;
+
+                      //Find duplicate events and remove them
+                      const itemEvents = this._dsItems.get({
+                        filter: function (item:any) {
+                          return (item.spId == updatedEvent.spId); // && item.id != oEvent.id
+                        }
+                      });
+                      this._dsItems.remove(itemEvents);
+
+                      //Create a duplicate event for each selected group value
+                      groupSplit.forEach(groupName => {
+                        const eventClone = structuredClone(updatedEvent);
+                        //Above duplicates the event object
+                        eventClone.id = IdSvc.getNext(); //Set a new ID
+
+                        //Find the associated group from it's name
+                        this.props.groups.every((group:IGroupItem) => {
+                          if (group.name == groupName) {
+                            eventClone.group = group.uniqueId;
+                            return false; //exit
+                          }
+                          else return true; //keep looping
+                        });
+
+                        //Add the clone to the DataSet
+                        this._dsItems.add(eventClone);
+                      });
+                      //} //From OLD block above
+
+                      /* Continuation from OLD block
+                      //Finalize single value events
+                      if (multipleValuesFound == false) {
+                        //Find the associated group from it's name
+                        this.props.groups.every((group:IGroupItem) => {
+                          if (group.name == groupFieldValue) {
+                            updatedEvent.group = group.uniqueId;
+                            return false; //exit
+                          }
+                          else return true; //keep looping
+                        });
+                      }
+                      */
+                    } //There is a groupFieldValue
+                  } //A groupField was selected && there are this.props.groups
+
+                  //Update the event
+                  if (multipleValuesFound == false)
+                    this._dsItems.update(updatedEvent);
+                }
+              }); //xmlDoc.querySelectorAll
+
+            }); //post.then
+          };
+
+          //Build URL to open clicked on item
 					const itemUrl = oEvent.encodedAbsUrl.substring(0, oEvent.encodedAbsUrl.lastIndexOf("/")); //cut off the ending: "/ID#_.000"
-          //OpenPopUpPage(itemUrl + "/DispForm.aspx?ID=" + oEvent.spId, function(result) {
-					// 	if (result == 0 || oEvent.spId.toString().contains("T")) //Edits to series/recurring events with IDs like "16.0.2020-06-08T16:00:00Z" actually have a different ID generated by the SP form action
-					// 		return;
-					// 	//Handle item updates or deletions
-          //}
-          //Just open in new tab for now
-          window.open(itemUrl + "/DispForm.aspx?ID=" + oEvent.spId, "_blank");
+          const origUrl = itemUrl + "/DispForm.aspx?ID=" + oEvent.spId + "&Source=" + 
+            encodeURIComponent(this.props.context.pageContext.web.absoluteUrl + "/_layouts/15/inplview.aspx?Cmd=ClosePopUI");
+          let lastUrl = "about:blank";
+
+          //Just open in new tab for now (until a custom modal dialog can be built that works for Modern & Classic pages)
+          const winProxy = window.open(origUrl, "_blank");
+          if (winProxy) { //Ensure browser didn't block opening the tab
+            /*
+            //For classic pages, need to overwrite the item deletion process
+            winProxy.addEventListener("load", (e:Event) => {
+              console.log("load: " + winProxy.location.href);
+              const winObj = winProxy as any;
+              if (winObj._ChangeLayoutMode || winObj._EditItem) {
+                const orig_DeleteItemConfirmation = winObj.DeleteTimeConfirmation;
+                winObj.DeleteItemConfirmation = function() {
+                  var result = orig_DeleteItemConfirmation();
+                  if (result) {
+                    const form = winProxy.document.getElementById("aspnetForm");
+                    const baseUrl = form.getAttribute("action");
+                    //Overwrite the action with a Source to force the dialog closed
+                    form.setAttribute("action", baseUrl + "&Source=" + encodeURIComponent(winObj._spPageContextInfo.webAbsoluteUrl + "/_layouts/15/inplview.aspx?Cmd=ClosePopUI"));
+                  }
+                  return result;
+                }
+              }
+            }, false);
+            */
+            winProxy.focus(); //just to make sure
+            
+            //Interval timer needed to *consistently* and *repeatedly* check if page has changed or win closed
+            const timerId = setInterval((handler:TimerHandler) => {
+              //winProxy.document and .location never seem to be null, so check .closed prop
+              if (winProxy.closed != true) {
+                //Has the special "close page" been reached?
+                //@ts-ignore (endsWith is valid)
+                if (winProxy.location.pathname.endsWith("/inplview.aspx") && winProxy.location.search === "?Cmd=ClosePopUI") {
+                  //console.log("found Cmd=ClosePopUI, closing window");
+                  clearInterval(timerId);
+                  window.focus(); //doesn't always focus back on main window (if back button is clicked)
+                  winProxy.close();
+                  checkSPOItem();
+                  return;
+                }
+
+                //Check if page was navigated
+                if (winProxy.location.href != lastUrl) {
+                  //Check for classic vs modern page (could pre-check if not a known classic calendar)
+                  //@ts-ignore
+                  if (winProxy._ChangeLayoutMode || winProxy._EditItem) {
+                    //This should already follow the Source redirect option to the inplview.aspx page
+                  }
+                  else {
+                    //Modern page (doesn't properly keep Source param from Disp to EditForm), so check if we are back at the original/DispForm page
+                    if (winProxy.location.href == origUrl && lastUrl != "about:blank") {
+                      //console.log("force close the window here!");
+                      clearInterval(timerId);
+                      window.focus(); //doesn't always focus back on main window (if back button is clicked)
+                      winProxy.close();
+                      checkSPOItem();
+                      return;
+                    }
+                  }
+
+                  //console.log("Interval: URL was changed: " + lastUrl);
+                  lastUrl = winProxy.location.href;
+ 
+                  //Pointless to add a "load" handler here as it fires right away since this is a new page/URL change
+                  
+                  // winProxy.addEventListener("beforeunload", (e:Event) => {
+                  //   //console.log("page changed-> beforeunload: " + winProxy.location.href);
+                  //   winProxy.opener.someFunction("inside interval-> beforeunload: " + winProxy.location.href);
+                  // }, false);
+                }
+              }
+              else {
+                //console.log("winProxy null or winProxy.closed");
+                clearInterval(timerId);
+                checkSPOItem(); //needed for case where single field updated in Modern page and user closed tab
+                window.focus(); //may not help at all
+              }
+            }, 250);
+          }
+
+          //NOTE: "readystatechange" and "navigate" and "popstate" never fired
+          /*fired before unload when page is closed (but you cannot tell the difference):
+          //  visibilitychange (hidden) (winProxy.closed: false) -> but it's same as first firing for about:blank
+          winProxy.addEventListener("visibilitychange", (e:Event) => {
+            console.log("visibilitychange (" + winProxy.document.visibilityState + ") (winProxy.closed: " + winProxy.closed + "): " + winProxy.location.href);
+            
+            //adding load here after about:blank doesn't help
+          }, false);
+          */
+          //visibilitychange
+          //  console.log("visibilitychange (" + winProxy.document.visibilityState + "): " + winProxy.location.href);
+          //  visibilitychange (hidden) also for when page is about to unload (while it is *visible*)
+          //DOMContentLoaded once
+          //Load fired here once
+          //Intervals check here
+          //beforeunload (when page is navigated; not fired when tab is closed)
+          //  & window.someFunction called!
+          //visibilitychange (same DispForm.aspx page)
+          
+          //unload (same DispForm.aspx page)
+          /* deprecated (but fired when page is closed) -> first for about:blank
+          winProxy.addEventListener("unload", (e:Event) => {
+            console.log("unload (deprecated): " + (winProxy && winProxy.location && winProxy.location.href || "null"));
+
+            //fired only for first page after about:blank unloaded
+            winProxy.addEventListener("load", (e:Event) => {
+              console.log("load from unload: " + winProxy.location.href);
+            }, false);
+          }, false);
+          */
 
           return; //Below could be used but #s4-workspace class .ms-core-overlay (for classic) needs to have
                 //style manually set: height: 714px; width: 592px; overflow-y: auto;
@@ -556,7 +939,48 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           );
           ReactDom.render(element1, dlgContainer);
         }
+
+        //Handle Outlook events
+        if (oEvent.calEventWebLink) {
+          //Just open in new tab for now
+          //window.open(oEvent.calEventWebLink, "_blank");
+
+          //Just open in new tab for now (until a custom modal dialog can be built that works with cross-origin)
+          const calProxy = window.open(oEvent.calEventWebLink, "_blank");
+          if (calProxy) { //Ensure browser didn't block opening the tab
+            calProxy.focus(); //just to make sure
+
+            //Cannot use an interval here to check calProxy.closed as it *always* shows true, despite being allowed per:
+            //https://developer.mozilla.org/en-US/docs/Web/Security/Same-origin_policy#window
+
+            //Look for when the timeline tab/window is focused on again
+            // const handleVisibilityChange = function() {
+            //   console.log("handleVisibilityChange, hidden:" + document.hidden + ", visibilityState:" + document.visibilityState);
+            // }
+            // document.addEventListener("visibilitychange", handleVisibilityChange);
+            const timelineFocused = () => {
+              //Remove listener
+              window.removeEventListener('focus', timelineFocused);
+
+              //Query for item and update in Timeline
+              const source = (oEvent.sourceObj as ICalendarItem);
+              const calConfigs = this.buildCalendarConfigs(source);
+              this.queryCalendar(source, calConfigs, oEvent, 0);
+            }
+            window.addEventListener('focus', timelineFocused);
+          }
+        }
       }
+    });
+
+    this._timeline.on('doubleClick', (props) => {
+      //TODO: Complete for adding events to calendar(s)
+      //properties.group: 4
+      //properties.time: date/time wehre clicked
+      //properties.snappedTime._d for start of day clicked and ._i for same as .time
+
+      //addEvent(props)
+      //  opens pop up page and then queries for item detail to dynamically add to timeline
     });
 
     //Build references
@@ -752,7 +1176,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         let divStyles = this.props.buildDivStyles(categoryItem);
         if (this.props.hideItemBoxBorder && divStyles.indexOf("background-color") == -1) //set bg to border color, mostly only applicable for vertical Holidays
           divStyles += "background-color:" + categoryItem.borderColor + ";";
-        styleHtml += '.vis-item.' + this.ensureValidClassName(categoryItem.name) + ' {' + divStyles + '}\r\n';
+        styleHtml += '.vis-item.' + this.props.ensureValidClassName(categoryItem.name) + ' {' + divStyles + '}\r\n';
 
         //Old way below when "advancedStyles" were JSON based
         //-----------------------------------
@@ -833,8 +1257,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       this.props.categories.forEach((value: ICategoryItem) => {
         if (value.visible) {
           const newElem = document.createElement("div");
-          newElem.className = "legendBox vis-item vis-range " + this.ensureValidClassName(value.name);
-          newElem.dataset.className = this.ensureValidClassName(value.name);
+          newElem.className = "legendBox vis-item vis-range " + this.props.ensureValidClassName(value.name);
+          newElem.dataset.className = this.props.ensureValidClassName(value.name);
           newElem.innerText = value.name;
           legend.appendChild(newElem);
         }
@@ -932,7 +1356,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           content: (g.html ? theContent : g.name),
           name: g.name, //For use in the bottomGroupsBar
           order: g.sortIdx,
-          visible: g.visible
+          visible: g.visible,
+          className: g.className
         }
       });
 
@@ -955,31 +1380,41 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       document.getElementById("legend-" + this.props.instanceId).style.display = "block";
     }
 
+    //Remove any existing events to prevent duplicate event adding (while in edit mode)
+    const itemEvents = this._dsItems.get({
+      filter: function (item:any) {
+        return (item.className != "weekend");
+      }
+    });
+    this._dsItems.remove(itemEvents);
+
+    //Get SharePoint list/calendar data
+    let spPromise = null as Promise<void | any[]>;
     if (this.props.lists) {
-      //Remove any existing events to prevent duplicate adding (while in edit mode)
-      const itemEvents = this._dsItems.get({
-        filter: function (item:any) {
-          return (item.className != "weekend");
-        }
-      });
-      this._dsItems.remove(itemEvents);
-      
       //Get the view CAML
-      this.getViewsCAML().then(() =>{
+      spPromise = this.getViewsCAML().then(() =>{
         //Now get the events
-        this.getEvents().then(response => {
+        return this.getSharePointEvents().then(response => {
           //console.log("all data returned, response is undefined because no data is actually returned");
-          showLegend();
         });
       });
     }
-    else
+
+    //Get Outlook calendar events
+    let outlookPromise = null as Promise<void | any[]>;
+    if (this.props.calsAndPlans) {
+      outlookPromise = this.getOutlookEvents();
+    }
+
+    //When both are finished
+    Promise.all([spPromise, outlookPromise]).then(response => {
       showLegend();
+    });
   }
 
-  private async getViewsCAML(): Promise<any[]> {
+  private getViewsCAML(): Promise<any[]> {
     //Build a new array of unique calendars to avoid querying the same one multiple times
-    return await Promise.all(this.props.lists.map((list:IListItem) => {
+    return Promise.all(this.props.lists.map((list:IListItem) => {
       //Only for lists that have View specified
       if (list.view !== null && list.view.trim() !== "") {
         //Build list filter, first assume a title then check if GUID
@@ -1029,18 +1464,13 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     }))
   }
 
-  private getFieldKeys(input?:string):string[] {
+  private getFieldKeys(prevValue?:string):string[] {
     let fieldKeys = [] as string[];
-    let source = (input || this.props.tooltipEditor);
+    let source = (prevValue || this.props.tooltipEditor);
     if (source) {
-      //Extract the {{property}} references
+      //Extract the {{property}} references which includes {{{triple references}}}
       fieldKeys = source.match(/{{(.*?)}}/g);
       if (fieldKeys) {
-        //Remove the vis.js "default" fields
-        fieldKeys = fieldKeys.filter(i => {
-          if (i != "{{content}}" && i != "{{start}}" && i != "{{end}}")
-              return i;
-        });
         //Extract just the field/"property" text from inside the {{ }} or {{{ }}}
         for (let i=0; i < fieldKeys.length; i++) {
             const matchResults = fieldKeys[i].match(/\w+/g);
@@ -1049,63 +1479,56 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             else //handle cases like "{{{limit Description}}}" where the actual Description property is at the end of the match
               fieldKeys[i] = matchResults[1];
         }
+
+        //Remove the vis.js "default" fields
+        fieldKeys = fieldKeys.filter(i => {
+          if (i != "content" && i != "start" && i != "end")
+              return i;
+        });
       }
     }
     return fieldKeys;
   }
 
-  private getEvents(): Promise<any[]> {
-    return Promise.all(this.props.lists.map((list:IListItem) => {
-      //Check for advanced configs
-      if (list.configs && list.configs.trim() != "") {
-        try {
-          const configs = JSON.parse(list.configs);
-          if (configs.camlFilter && configs.camlFilter.trim() != "")
-            list.camlFilter = configs.camlFilter;
-          
-          //Set visible prop
-          list.visible = (configs.visible == false ? false : true);
-
-          //Set UTC prop
-          if (configs.dateInUtc != null)
-            list.dateInUtc = configs.dateInUtc;
-          
-          //Option to dynamically assign/build
-          //const userOptions = JSON.parse(this.props.visJsonProperties); //just in case
-          //options = this.extend(true, options, userOptions); //userOptions override set "defaults" above
-        }
-        catch (e) {}
+  private buildListConfigs(list:IListItem): IListConfigs {
+    let configs = {} as IListConfigs;
+    if (list.configs && list.configs.trim() != "") {
+      try {
+        configs = JSON.parse(list.configs);
       }
-      
+      catch (e) {}
+    }
 
-      if (list.visible == false)
-        return; //skip this one
+    //Ensure properties have valid types (with default values as needed)
+    if (configs.camlFilter && typeof configs.camlFilter !== "string")
+      configs.camlFilter = null;
+    if (configs.dateInUtc && typeof configs.dateInUtc !== "boolean")
+      configs.dateInUtc = true;
+    if (configs.visible && typeof configs.visible !== "boolean")
+      configs.visible = true;
+    if (configs.multipleCategories && typeof configs.multipleCategories !== "string")
+      configs.multipleCategories = "useFirst";
+    if (configs.extendEndTimeAllDay && typeof configs.extendEndTimeAllDay !== "boolean")
+      configs.extendEndTimeAllDay = true;
+    //When adding new props, consider  the effects of the prop *not* being provided/set at all
 
-      return this.queryList(list);
-    }))
-  }
-
-  private calendarEventsSoapEnvelope(list:IListItem, nextPageDetail?:string):string {
-    const fieldKeys = this.getFieldKeys();
-    const includeRecurrence = (list.isCalendar != false);
-    
-    //Set classField and className props
+    //Add Category props to configs (classField and className)
     //Split on the : char to determine if a field or category was selected (Field:fieldInternalName or Static:category.uniqueId)
     if (list.category) {
       const catValues = list.category.split(":");
       if (catValues[0] == "Field") {
-        list.classField = catValues[1];
-        if (list.className)
-          list.className = null;
+        configs.classField = catValues[1];
+        if (configs.className)
+          configs.className = null;
       }
-      else { //[0] assumed to be "Static"
+      else { //catValues[0] assumed to be "Static"
         const categoryId = catValues[1]; //Will be the uniqueId, need to get the display name next
         if (this.props.categories) {
           this.props.categories.every((category:ICategoryItem) => {
             if (category.uniqueId == categoryId) {
-              list.className = category.name; //store the display name instead
-              if (list.classField)
-                list.classField = null;
+              configs.className = category.name; //store the display name instead
+              if (configs.classField)
+                configs.classField = null;
               return false; //exit
             }
             else return true; //keep looping
@@ -1114,26 +1537,455 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       }
     }
 
-    //Set groupField and groupId props
+    //Add Group/Row props to configs (groupField and groupId)
     //Split on the : char to determine if a field or category was selected
     if (list.group) {
       const catValues = list.group.split(":");
       if (catValues[0] == "Field") {
-        list.groupField = catValues[1];
-        if (list.groupId)
-          list.groupId = null;
+        configs.groupField = catValues[1];
+        if (configs.groupId)
+          configs.groupId = null;
       }
       else { //[0] assumed to be "Static"
-        list.groupId = catValues[1]; //Will be the uniqueId
-        if (list.groupField)
-          list.groupField = null;
+        configs.groupId = catValues[1]; //Will be the uniqueId
+        if (configs.groupField)
+          configs.groupField = null;
       }
     }
 
+    return configs;
+  }
+
+  private buildCalendarConfigs(calendar:ICalendarItem): ICalendarConfigs {
+    let calConfigs = {} as ICalendarConfigs;
+      if (calendar.configs && calendar.configs.trim() != "") {
+        try {
+          calConfigs = JSON.parse(calendar.configs);
+        }
+        catch (e) {}
+      }
+
+      //Ensure properties have valid types (with default values as needed)
+      if (calConfigs.visible && typeof calConfigs.visible !== "boolean")
+        calConfigs.visible = true;
+      if (calConfigs.multipleCategories && typeof calConfigs.multipleCategories !== "string")
+        calConfigs.multipleCategories = "useFirst";
+      //Checking null+undefined required here to have a default obj value
+      if (!calConfigs.fieldValueMappings || typeof calConfigs.fieldValueMappings !== "object") //null is an "object"
+        calConfigs.fieldValueMappings = {};
+      //When adding new props, consider  the effects of the prop *not* being provided/set at all
+
+      //Add Category props to configs (classField and className)
+      //Split on the : char to determine if a field or category was selected (Field:owaField or Static:category.uniqueId)
+      if (calendar.category) {
+        const catValues = calendar.category.split(":");
+        if (catValues[0] == "Field") {
+          calConfigs.classField = catValues[1];
+          if (calConfigs.className)
+            calConfigs.className = null;
+        }
+        else { //[0] assumed to be "Static"
+          const categoryId = catValues[1]; //Will be the uniqueId, need to get the display name next
+          if (this.props.categories) {
+            this.props.categories.every((category:ICategoryItem) => {
+              if (category.uniqueId == categoryId) {
+                calConfigs.className = category.name; //store the display name instead
+                if (calConfigs.classField)
+                  calConfigs.classField = null;
+                return false; //exit
+              }
+              else return true; //keep looping
+            });
+          }
+        }
+      }
+
+      //Add Group/Row props to configs (groupField and groupId)
+      //Split on the : char to determine if a field or category was selected
+      if (calendar.group) {
+        const catValues = calendar.group.split(":");
+        if (catValues[0] == "Field") {
+          calConfigs.groupField = catValues[1];
+          if (calConfigs.groupId)
+            calConfigs.groupId = null;
+        }
+        else { //[0] assumed to be "Static"
+          calConfigs.groupId = catValues[1]; //Will be the uniqueId
+          if (calConfigs.groupField)
+            calConfigs.groupField = null;
+        }
+      }
+
+      return calConfigs;
+  }
+
+  private getSPItemDates(list:IListItem, listConfigs:IListConfigs, itemData:any): IItemDateInfo {
+    function getFieldValue(name:string) {
+      if (name == null)
+        return null;
+
+      if (itemData.getAttribute) //SOAP
+        return itemData.getAttribute("ows_" + name);
+      else
+        return itemData[name];
+    }
+
+    const allDayEvent = (getFieldValue("fAllDayEvent") == "1" || getFieldValue("fAllDayEvent") == true ? true : false);
+    let strStartDateValue = getFieldValue(list.startDateField);
+    if (allDayEvent)
+      strStartDateValue = strStartDateValue.split("Z")[0]; //Drop the zulu designation to make it handle date as local
+    const eventStartDate = this.formatDateFromSOAP(strStartDateValue);
+
+    let eventEndDate; //might be null for custom lists where the field isn't required/populated
+    if (list.endDateField) {
+      let strEndDateValue = getFieldValue(list.endDateField);
+      if (strEndDateValue) {
+        if (allDayEvent)
+          strEndDateValue = strEndDateValue.split("Z")[0]; //Drop the zulu designation to make it handle date as local
+
+        eventEndDate = this.formatDateFromSOAP(strEndDateValue);
+        //Check for non-calendar list dates in which no time is provided...
+        if (list.isCalendar == false && listConfigs.extendEndTimeAllDay && eventEndDate.getHours() == 0 && eventEndDate.getMinutes() == 0) {
+          //...change the time to the end of day
+          eventEndDate.setDate(eventEndDate.getDate() + 1);
+          eventEndDate.setSeconds(eventEndDate.getSeconds() - 1);
+        }
+      }
+    }
+
+    return {
+      eventStartDate: eventStartDate,
+      eventEndDate: eventEndDate
+    }
+  }
+
+  private buildSPOItemObject(list:IListItem, listConfigs:IListConfigs, fieldKeys:string[], itemData:any, existingId?:number):any {
+    function getFieldValue(name:string) {
+      if (name == null)
+        return null;
+
+      if (itemData.getAttribute) //SOAP
+        return itemData.getAttribute("ows_" + name);
+      else
+        return itemData[name];
+    }
+
+    const itemDateInfo = this.getSPItemDates(list, listConfigs, itemData);
+
+    //Get the "title" value
+    let strTitle = "[No Title]"; //default value
+    if (list.titleField) {
+      strTitle = (getFieldValue(list.titleField) || strTitle);
+      //Check for and handle calculated & lookup column formatting
+      const splits = strTitle.split(";#"); //string;#Custom title
+      strTitle = (splits[1] || splits[0]); //0 index is for other/"regular" fields
+    }
+    else //Fallback
+      strTitle = (getFieldValue("Title") || strTitle);
+      
+    //Build the event obj
+    let oEvent = {
+      id: (existingId || IdSvc.getNext()),
+      spId: getFieldValue("ID"),
+      encodedAbsUrl: getFieldValue("EncodedAbsUrl"),
+      sourceObj: list,
+      content: strTitle,
+      //title: elem.getAttribute("ows_Title"), //Tooltip
+      start: itemDateInfo.eventStartDate,
+      //end: elem.getAttribute("ows_EndDate"),
+      type: "range", //Changed later as needed
+      //className: //assigned next
+      //group: list.groupId //assigned next
+    } as any;
+    
+    //Add end date if applicable
+    if (itemDateInfo.eventEndDate) {
+      oEvent.end = itemDateInfo.eventEndDate;
+      //Force single day events as point?
+      //if (this.props.singleDayAsPoint && (elem.getAttribute(item.startFieldName).substring(0, 10) == elem.getAttribute(item.endFieldName).substring(0, 10)))
+      //Better handling for user's time zone
+      if (this.props.singleDayAsPoint && (itemDateInfo.eventStartDate.toLocaleDateString() === itemDateInfo.eventEndDate.toLocaleDateString()))
+        oEvent.type = "point";
+    }
+    else //no end date, so make it a point
+      oEvent.type = "point";
+
+    //Add class/category
+    if (listConfigs.className)
+      oEvent.className = this.props.ensureValidClassName(listConfigs.className);
+    //Apply class by category field
+    else if (listConfigs.classField) {
+      let classFieldValue = getFieldValue(listConfigs.classField); //calConfigs.classField
+      if (classFieldValue) {
+        const categorySplit = this.handleMultipleSOAPValues(classFieldValue);
+        //NOTE: "regular" text values without ;# still result in ["Single value"] array, so below logic still works
+        if (listConfigs.multipleCategories == 'useLast')
+          oEvent.className = this.props.ensureValidClassName(categorySplit[categorySplit.length-1]);
+        else //default to use first value
+          oEvent.className = this.props.ensureValidClassName(categorySplit[0]);
+      }
+    }
+
+    if (oEvent.className && oEvent.className == this.props.ensureValidClassName(this.props.holidayCategories)) {
+      oEvent.type = "background"; //change to background
+      oEvent.group = null; //apply to entire timeline
+    }
+    
+    //Add data to the event object (for later tooltip template processing)
+    fieldKeys.forEach(field => {
+      //Skip these fields to prevent their above defined value from being overwritten
+      if (field == "id" || field == "content" || field == "start" || field == "end" || field == "type" || field == "className")
+        return;
+
+      let fieldValue = getFieldValue(field);
+      if (fieldValue) {
+        oEvent[field] = (fieldValue || ""); //save initial value
+        //Look for special fields
+        if (field == "Description") {
+          //Remove blanks
+          if (fieldValue == "<div></div>" || fieldValue == "<div></div><p>​</p>") //last one has a *hidden* character
+            fieldValue = "";
+          //If HTML text (versus plain text), starts with < character
+          if (fieldValue.indexOf("<") == 0) {
+            //Remove break at end of paragraph and empty paragraphs and paragraph with a *hidden* &ZeroWidthSpace; character
+            fieldValue = fieldValue.replace(/<br><\/p>/g, "</p>").replace(/<p><\/p>/g, "").replace(/<p>​<\/p>/g, ""); //last one has a *hidden* character
+            /*//Wrap just to make "finding" easier in next steps
+            var $desc = $("<div>" + fieldValue + "</div>");
+            //Remove padding from first paragraph
+            $desc.find("p:first").css("margin-top", "0");
+            //Remove white background styling
+            $desc.find("*").each(function() {
+                if ($(this).css("background-color") == "#ffffff" || $(this).css("background-color") == "rgb(255, 255, 255)")
+                  $(this).css("background-color", "inherit");
+            })
+            //$("table").css("width", "100%");
+            
+            //Extract the new HTML
+            fieldValue = $desc[0].outerHTML;
+            */
+            const divWrapper = document.createElement("div");
+            divWrapper.innerHTML = fieldValue;
+            const firstP = divWrapper.querySelector("p:first-child") as HTMLElement;
+            //Remove padding from first paragraph
+            if (firstP)
+              firstP.style.marginTop = "0px";
+            divWrapper.querySelectorAll("*").forEach((elem: HTMLElement) => {
+              //Remove white and gray background colors
+              if (elem.style.backgroundColor == "#ffffff" || elem.style.backgroundColor == "rgb(255, 255, 255)" ||
+                    elem.style.backgroundColor == "#dfdfdf")
+                elem.style.backgroundColor = "inherit";
+            });
+            fieldValue = divWrapper.outerHTML;
+          }
+          else { //Plain text
+            fieldValue = fieldValue.replace(/\r?\n/g, "<br>");
+            //Make sure it's not ending with a line break
+            fieldValue = fieldValue.replace(/<br>$/, "");
+          }
+          //Set prop with updated value
+          oEvent[field] = fieldValue;
+        }
+        else {
+          //Handle Number/Currency field values like 1.00000000000000 & 10.2000000000000
+          //@ts-ignore endsWith is valid
+          if (isNaN(Number(fieldValue)) == false && fieldValue.toString().endsWith("0000")) {
+            //Number() removes the extra 0s
+            fieldValue = Number(fieldValue).toString();
+          }
+
+          //Check for lookup (and choice?) fields with "123;#Display Name" format and multiple value fields also using ";#" delimeter
+          // let fieldSplit = fieldValue.split(";#");
+          // if (fieldSplit.length == 2)
+          //   oEvent[field] = fieldSplit[1];
+          // else if (fieldSplit.length > 2) {
+          //   //Multiple value field (";#Chevy;#Porsche;#"); remove potential blank entries in split
+          //   fieldSplit = fieldSplit.filter(i => {return i});
+          //   oEvent[field] = fieldSplit.join(", ");
+          // }
+          const fieldSplit = this.handleMultipleSOAPValues(fieldValue);
+          oEvent[field] = fieldSplit.join(", ");
+        }
+      }
+    });
+
+    return oEvent;
+  }
+
+  private getFieldMappedValue(configsObj:any, field:string, fieldValue:string): any {
+    //Handle any user provided mappings
+    /* Example format
+    {
+      "showAs": { --> This is the valueMappingObj
+        "oof": "Out of Office",
+        "free": "Free"
+      },
+      "nextField": {...}
+    }
+    */
+    if (configsObj.fieldValueMappings) {
+      const valueMappingObj = configsObj.fieldValueMappings[field]
+      if (valueMappingObj && typeof valueMappingObj === "object") {
+        //Get the new [mapped] value
+        const newValue = valueMappingObj[fieldValue];
+        return (newValue || fieldValue);
+      }
+    }
+    return fieldValue;
+  }
+
+  //For calEvent prop: Extend Graph.Event interface with implicitly defined index signature (to support eventObj["keyFieldName"] retrieval)
+  private buildCalendarEventObject(calendar:ICalendarItem, calConfigs:ICalendarConfigs, fieldKeys:string[], calEvent:MicrosoftGraph.Event & {[key: string]:any}, existingId?:number):any {
+    //Get the "title" value
+    let strTitle = "[No Title]"; //default value, changed next
+    if (calEvent.subject != null && calEvent.subject.trim() != "") {
+      strTitle = calEvent.subject;
+    }
+    
+    //Process "non-dates" ("0001-01-01T00:00:00Z" is returned for private events)
+    if (calEvent.createdDateTime == "0001-01-01T00:00:00Z") { //had: calEvent.sensitivity == "private" && 
+      calEvent.createdDateTime = null;
+      calEvent.lastModifiedDateTime = null;
+    }
+
+    //Build the event obj
+    let oEvent = {
+      id: IdSvc.getNext(),
+      //spId: TODO: Rename to sourceId? for calEvent.id
+      eventId: calEvent.id,
+      //encodedAbsUrl: for SPO,
+      calEventWebLink: calEvent.webLink,
+      sourceObj: calendar,
+      content: strTitle,
+      //title: elem.getAttribute("ows_Title"), //Tooltip
+      start: new Date(calEvent.start.dateTime + (calEvent.isAllDay ? "" : "Z")), //treat as local time for all day events
+      end: new Date(calEvent.end.dateTime + (calEvent.isAllDay ? "" : "Z")),
+      type: "range", //Changed later as needed
+          //  location: calEvent.location.displayName,
+      //className: //assigned next
+      //group: list.groupId //assigned next
+    } as any;
+    
+    //Force single day events as point?
+    if (this.props.singleDayAsPoint && (oEvent.start.toLocaleDateString() === oEvent.end.toLocaleDateString()))
+      oEvent.type = "point";
+
+    //Add class/category
+    if (calConfigs.className)
+      oEvent.className = this.props.ensureValidClassName(calConfigs.className);
+    //Apply class by category field
+    else if (calConfigs.classField) {
+      //Check for an array
+      const classFieldValue = calEvent[calConfigs.classField];
+      if (Array.isArray(classFieldValue)) {
+        let mappedValue = null;
+        if (calConfigs.multipleCategories == 'useLast')
+          mappedValue = this.getFieldMappedValue(calConfigs, calConfigs.classField, classFieldValue[classFieldValue.length-1]);
+        else //default to use first value
+          mappedValue = this.getFieldMappedValue(calConfigs, calConfigs.classField, classFieldValue[0]);
+        
+        //Set it
+        oEvent.className = this.props.ensureValidClassName(mappedValue);
+      }
+      else {
+        const mappedValue = this.getFieldMappedValue(calConfigs, calConfigs.classField, classFieldValue);
+        oEvent.className = this.props.ensureValidClassName(mappedValue);
+      }
+    }
+
+    if (oEvent.className && oEvent.className == this.props.ensureValidClassName(this.props.holidayCategories)) {
+      oEvent.type = "background"; //change to background
+      oEvent.group = null; //apply to entire timeline
+    }
+    
+    // //Call custom function if provided
+    // if (TC.settings.beforeEventAdded)
+    //   oEvent = TC.settings.beforeEventAdded(oEvent, $(this), cal);
+
+    //Add data to the event object (for later tooltip template processing)
+    fieldKeys.forEach(field => {
+      //Skip these fields to prevent their above defined value from being overwritten
+      if (field == "id" || field == "content" || field == "start" || field == "end" || field == "type" || field == "className")
+        return;
+
+      let fieldValue = calEvent[field]; //TODO: support object values like organizer.emailAddress.address
+      //let wasMapped = true;
+      //Map certain field names to help match to existing SP calendar fields
+      switch (field) {
+        case "Location":
+          fieldValue = calEvent.location.displayName;
+          oEvent["Location"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          break;
+
+        case "Category":
+          fieldValue = calEvent.categories.join(", ");
+          oEvent["Category"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          break;
+
+        case "Description":
+          fieldValue = (calEvent.body && calEvent.body.content || "");
+          oEvent["Description"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          break;
+
+        case "Author":
+          fieldValue = (calEvent.organizer && calEvent.organizer.emailAddress.name || "");
+          oEvent["Author"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          break;
+
+        // case "Editor":
+        //   fieldValue = calEvent.??; //perhaps an extended MAPI property
+        //   oEvent["Editor"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+        //   break;
+
+        case "Created":
+          fieldValue = calEvent.createdDateTime;
+          oEvent["Created"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          break;
+        
+        case "Modified":
+          fieldValue = calEvent.lastModifiedDateTime;
+          oEvent["Modified"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          break;
+
+        case "charmIcon":
+          fieldValue = (calEvent.singleValueExtendedProperties && calEvent.singleValueExtendedProperties[0] &&
+                          calEvent.singleValueExtendedProperties[0].value || "");
+          if (fieldValue == "None")
+            fieldValue = "";
+          oEvent["charmIcon"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          break;
+
+        default:
+          //wasMapped = false;
+          oEvent[field] = (this.getFieldMappedValue(calConfigs, field, fieldValue) || "");
+      }
+
+      //If value wasn't set in above switch, set it now using the default field key
+      //if (fieldValue && wasMapped == false)
+      //  oEvent[field] = (fieldValue || "");
+    });
+
+    return oEvent;
+  }
+
+  private getSharePointEvents(): Promise<any[]> {
+    return Promise.all(this.props.lists.map((list:IListItem) => {
+      let configs = this.buildListConfigs(list);
+      //Only process valid entries
+      if (configs.visible == false)
+        return; //skip this one
+      else
+        return this.queryList(list, configs);
+    }))
+  }
+
+  private calendarEventsSoapEnvelope(list:IListItem, listConfigs:IListConfigs, nextPageDetail?:string):string {
+    const fieldKeys = this.getFieldKeys();
+    const includeRecurrence = (list.isCalendar != false);
+  
     let returnVal = "<soapenv:Envelope xmlns:soapenv='http://schemas.xmlsoap.org/soap/envelope/'><soapenv:Body><GetListItems xmlns='http://schemas.microsoft.com/sharepoint/soap/'>" + 
 			"<listName>" + list.list + "</listName>" + 
 			"<viewFields><ViewFields>" + 
-				"<FieldRef Name='Title' />" + 
+				//"<FieldRef Name='Title' />" + 
         (list.titleField ? "<FieldRef Name='" + list.titleField + "' />" : "") +
 				//"<FieldRef Name='Location' />" + 
 				"<FieldRef Name='EventDate' />" +
@@ -1144,16 +1996,16 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         //fAllDayEvent seems to be included by default
         //"<FieldRef Name='Author' />" + //now pulled from tooltip template if included there (see fieldKeys loop below)
         //"<FieldRef Name='Editor' />" +
-        (list.classField ? "<FieldRef Name='" + list.classField + "' />" : "") +
-        (list.groupField ? "<FieldRef Name='" + list.groupField + "' />" : "");
+        (listConfigs.classField ? "<FieldRef Name='" + listConfigs.classField + "' />" : "") +
+        (listConfigs.groupField ? "<FieldRef Name='" + listConfigs.groupField + "' />" : "");
 
     //Add fields used in the tooltip
     fieldKeys.forEach(field => {
       returnVal += "<FieldRef Name='" + field + "' />";
     });
     
-    //Add non-calendar fields
-    if (list.startDateField) //list.isCalendar == false &&
+    //Add date fields
+    if (list.startDateField)
       returnVal += "<FieldRef Name='" + list.startDateField + "' />";
     if (list.endDateField)
       returnVal += "<FieldRef Name='" + list.endDateField + "' />";
@@ -1172,8 +2024,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     let filterToUse = null;
     if (list.viewFilter)
       filterToUse = list.viewFilter;
-    else if (list.camlFilter && list.camlFilter.trim() != "")
-      filterToUse = list.camlFilter;
+    else if (listConfigs.camlFilter && listConfigs.camlFilter.trim() != "")
+      filterToUse = listConfigs.camlFilter;
 
     if (filterToUse)
       query += "<And>" + filterToUse;
@@ -1223,14 +2075,13 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       "<ViewAttributes Scope='RecursiveAll' />" +
       //"<IncludeMandatoryColumns>FALSE</IncludeMandatoryColumns>" +
       "<ViewFieldsOnly>TRUE</ViewFieldsOnly>" +
-      //(this.props.getDatesAsUtc ? "<DateInUtc>TRUE</DateInUtc>" : "") + //True returns dates as "2023-10-10T06:00:00Z" versus "2023-10-10 08:00:00"
-      (list.dateInUtc == false ? "" : "<DateInUtc>TRUE</DateInUtc>") +
+      (listConfigs.dateInUtc == false ? "" : "<DateInUtc>TRUE</DateInUtc>") + //True returns dates as "2023-10-10T06:00:00Z" versus "2023-10-10 08:00:00"
     "</QueryOptions></queryOptions></GetListItems></soapenv:Body></soapenv:Envelope>";
     
     return returnVal;
   }
 
-  private handleMultiValues(fieldValue:string): string[] {
+  private handleMultipleSOAPValues(fieldValue:string): string[] {
     //Check for multiple value fields (single value fields work fine and result in ["Single value"] array)
     let fieldSplit = fieldValue.split(";#");
 
@@ -1298,14 +2149,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     return fieldSplit;
   }
 
-  private async queryList(list:IListItem, nextPageDetail?:string): Promise<void> {
+  private async queryList(list:IListItem, listConfigs:IListConfigs, nextPageDetail?:string): Promise<void> {
     return await this.props.context.spHttpClient.post(list.siteUrl + "/_vti_bin/lists.asmx", SPHttpClient.configurations.v1,
     {
       headers: [
         ["Accept", "application/xml, text/xml, */*; q=0.01"],
         ["Content-Type", 'text/xml; charset="UTF-8"']
       ],
-      body: this.calendarEventsSoapEnvelope(list, nextPageDetail)
+      body: this.calendarEventsSoapEnvelope(list, listConfigs, nextPageDetail)
     }).then((response: SPHttpClientResponse) => response.text())
     .then((strXml: any) => {
       // //Check for problems such as access denied to the site/web object
@@ -1339,8 +2190,9 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       const fieldKeys = this.getFieldKeys();
       
       //Need to determine which date fields to use (calendar vs non-calendars)
-      const startFieldName = (list.isCalendar == false ? "ows_" + list.startDateField : "ows_EventDate"); //must have a start date
-      const endFieldName = (list.isCalendar == false ? (list.endDateField ? "ows_" + list.endDateField : null) : "ows_EndDate");
+      //const startFieldName = (list.isCalendar == false ? "ows_" + list.startDateField : "ows_EventDate"); //must have a start date
+      //const endFieldName = (list.isCalendar == false ? (list.endDateField ? "ows_" + list.endDateField : null) : "ows_EndDate");
+      //moved...
 
       let pagingDetails:string = null;
       const parser = new DOMParser();
@@ -1352,197 +2204,29 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         
         //Loop over the event/data results
         else if(elem.nodeName == "z:row") { //actual data is here
-          //Build date variables
-          const allDayEvent = (elem.getAttribute("ows_fAllDayEvent") == "1" ? true : false);
-          let strStartDateValue = elem.getAttribute(startFieldName);
-          if (allDayEvent)
-            strStartDateValue = strStartDateValue.split("Z")[0]; //Drop zulu to make it handle date as local
-          const eventStartDate = this.formatDateFromSOAP(strStartDateValue);
-
-          let eventEndDate;
-          if (endFieldName) {
-            let strEndDateValue = elem.getAttribute(endFieldName);
-            if (allDayEvent)
-              strEndDateValue = strEndDateValue.split("Z")[0]; //Drop zulu to make it handle date as local
-            eventEndDate = this.formatDateFromSOAP(strEndDateValue);
-            //Check for non-calendar list dates in which no time is provided...
-            if (eventEndDate.getHours() == 0 && eventEndDate.getMinutes() == 0) {
-              //...change the time to the end of day
-              eventEndDate.setDate(eventEndDate.getDate() + 1);
-              eventEndDate.setSeconds(eventEndDate.getSeconds() - 1);
-              //strEndDate = eventEndDate.format("yyyy-MM-dd HH:mm:ss");
-              //These are not the UTC versions...
-              //strEndDate = eventEndDate.getFullYear().toString() + "-" + (eventEndDate.getMonth()+1).toString() +
-            }
-          }
-          lastStartDate = eventStartDate; //saved for later
+          const itemDateInfo = this.getSPItemDates(list, listConfigs, elem);
+          //const startFieldName = "ows_" + list.startDateField;
+          //const endFieldName = (list.endDateField ? "ows_" + list.endDateField : null);
+          lastStartDate = itemDateInfo.eventStartDate; //saved for later
           
           //CAML returns *recurring* events for a whole year prior to and after today regardless of any EventDate/EndDate filters
           //So only include events that fall within the requested date range
-          if ((eventEndDate == null || eventEndDate >= this.getMinDate()) && eventStartDate <= this.getMaxDate()) {
+          if ((itemDateInfo.eventEndDate == null || itemDateInfo.eventEndDate >= this.getMinDate()) && itemDateInfo.eventStartDate <= this.getMaxDate()) {
             //numOfValidItems++;
             
-            //Get the "title" value
-            let strTitle = "[No Title]"; //default value, changed next
-            if (list.titleField) {
-              strTitle = (elem.getAttribute("ows_" + list.titleField) || strTitle);
-              //Check for and handle calculated & lookup column formatting
-              const splits = strTitle.split(";#"); //string;#Custom title
-              strTitle = (splits[1] || splits[0]); //0 index is for other/"regular" fields
-            }
-            else
-              strTitle = (elem.getAttribute("ows_Title") || strTitle);
-              
-            //Build the event obj
-            let oEvent = {
-              id: IdSvc.getNext(),
-              spId: elem.getAttribute("ows_ID"),
-              encodedAbsUrl: elem.getAttribute("ows_EncodedAbsUrl"),
-              content: strTitle,
-              //title: elem.getAttribute("ows_Title"), //Tooltip
-              start: eventStartDate,
-              //end: elem.getAttribute("ows_EndDate"),
-              type: "range", //Changed later as needed
-              //location: elem.getAttribute("ows_Location"),
-              //className: //assigned next
-              //group: list.groupId //assigned next
-            } as any;
-            
-            //Add end date if applicable
-            if (eventEndDate) {
-              oEvent.end = eventEndDate;
-              //Force single day events as point?
-              if (this.props.singleDayAsPoint && (elem.getAttribute(startFieldName).substring(0, 10) == elem.getAttribute(endFieldName).substring(0, 10)))
-                oEvent.type = "point";
-            }
-            else //no end date, so make it a point
-              oEvent.type = "point";            
-
-            //Add class/category
-            if (list.className)
-              oEvent.className = this.ensureValidClassName(list.className);
-            //Apply class by category field
-            else if (list.classField)
-              oEvent.className = this.ensureValidClassName(elem.getAttribute("ows_" + list.classField));
-
-            /* Handled above instead, and address where end date is after start but still has no time
-            //Special checks for range events (mostly for non-calendar lists)
-            if (oEvent.type == "range") {
-              //"range" events needs an end property, but also make sure "same day" events show ending at end of the day
-              if (oEvent.end == null || oEvent.start.getTime() == oEvent.end.getTime()) {
-                var end = new Date(oEvent.start.getTime());
-                end.setDate(end.getDate() + 1);
-                end.setSeconds(end.getSeconds() - 1);
-                oEvent.end = end;
-              }
-            }*/
-
-            // //Set holiday render format
-            // if (oEvent.className == TC.settings.holidayClass && TC.settings.holidayType != "point") { //override render type to range
-            //   oEvent.type = "range";
-            //   //Vertical holiday?
-            //   if (TC.settings.holidayType == "verticalBar") {
-            //     /*oEvent.className += " verticalBar";
-            //     //Force event to top group
-            //     oEvent.group = topGroupIds.firstGroupId;*/
-            //     oEvent.type = "background";
-            //   }
-            // }
-            if (oEvent.className && oEvent.className == this.ensureValidClassName(this.props.holidayCategories)) {
-              oEvent.type = "background"; //change to background
-              oEvent.group = null; //apply to entire timeline
-            }
-            
-            // //Call custom function if provided
-            // if (TC.settings.beforeEventAdded)
-            //   oEvent = TC.settings.beforeEventAdded(oEvent, $(this), cal);
-
-            //Add data to the event object (for later tooltip template processing)
-            fieldKeys.forEach(field => {
-              //Skip these fields to prevent their above defined value from being overwritten
-              if (field == "content" || field == "start" || field == "end")
-                return;
-
-              let fieldValue = elem.getAttribute("ows_" + field);
-              if (fieldValue) {
-                oEvent[field] = (fieldValue || ""); //save initial value
-                //Look for special fields
-                if (field == "Description") {
-                  //Remove blanks
-                  if (fieldValue == "<div></div>" || fieldValue == "<div></div><p>​</p>") //last one has a *hidden* character
-                    fieldValue = "";
-                  //If HTML text (versus plain text), starts with < character
-                  if (fieldValue.indexOf("<") == 0) {
-                    //Remove break at end of paragraph and empty paragraphs and paragraph with a *hidden* &ZeroWidthSpace; character
-                    fieldValue = fieldValue.replace(/<br><\/p>/g, "</p>").replace(/<p><\/p>/g, "").replace(/<p>​<\/p>/g, ""); //last one has a *hidden* character
-                    /*//Wrap just to make "finding" easier in next steps
-                    var $desc = $("<div>" + fieldValue + "</div>");
-                    //Remove padding from first paragraph
-                    $desc.find("p:first").css("margin-top", "0");
-                    //Remove white background styling
-                    $desc.find("*").each(function() {
-                        if ($(this).css("background-color") == "#ffffff" || $(this).css("background-color") == "rgb(255, 255, 255)")
-                          $(this).css("background-color", "inherit");
-                    })
-                    //$("table").css("width", "100%");
-                    
-                    //Extract the new HTML
-                    fieldValue = $desc[0].outerHTML;
-                    */
-                    const divWrapper = document.createElement("div");
-                    divWrapper.innerHTML = fieldValue;
-                    const firstP = divWrapper.querySelector("p:first-child") as HTMLElement;
-                    //Remove padding from first paragraph
-                    if (firstP)
-                      firstP.style.marginTop = "0px";
-                    divWrapper.querySelectorAll("*").forEach((elem: HTMLElement) => {
-                      //Remove white and gray background colors
-                      if (elem.style.backgroundColor == "#ffffff" || elem.style.backgroundColor == "rgb(255, 255, 255)" ||
-                            elem.style.backgroundColor == "#dfdfdf")
-                        elem.style.backgroundColor = "inherit";
-                    });
-                    fieldValue = divWrapper.outerHTML;
-                  }
-                  else { //Plain text
-                    fieldValue = fieldValue.replace(/\r?\n/g, "<br>");
-                    //Make sure it's not ending with a line break
-                    fieldValue = fieldValue.replace(/<br>$/, "");
-                  }
-                  //Set prop with updated value
-                  oEvent[field] = fieldValue;
-                }
-                else {
-                  //Handle Number/Currency field values like 1.00000000000000 & 10.2000000000000
-                  //@ts-ignore endsWith is valid
-                  if (isNaN(Number(fieldValue)) == false && fieldValue.endsWith("0000")) {
-                    //Number() removes the extra 0s
-                    fieldValue = Number(fieldValue).toString();
-                  }
-
-                  //Check for lookup (and choice?) fields with "123;#Display Name" format and multiple value fields also using ";#" delimeter
-                  // let fieldSplit = fieldValue.split(";#");
-                  // if (fieldSplit.length == 2)
-                  //   oEvent[field] = fieldSplit[1];
-                  // else if (fieldSplit.length > 2) {
-                  //   //Multiple value field (";#Chevy;#Porsche;#"); remove potential blank entries in split
-                  //   fieldSplit = fieldSplit.filter(i => {return i});
-                  //   oEvent[field] = fieldSplit.join(", ");
-                  // }
-                  const fieldSplit = this.handleMultiValues(fieldValue);
-                  oEvent[field] = fieldSplit.join(", ");
-                }
-              }
-            });
+            const oEvent = this.buildSPOItemObject(list, listConfigs, fieldKeys, elem);
+            if (oEvent.start == null) //just as a precaution to prevent script error adding object to DataSet
+              return;
 
             //Add group (row/swimlane)
             let multipleValuesFound = false;
-            if (list.groupId)
-              oEvent.group = list.groupId;
-            else if (list.groupField && this.props.groups) {
+            if (listConfigs.groupId)
+              oEvent.group = listConfigs.groupId;
+            else if (listConfigs.groupField && this.props.groups) {
               //Find the associated group to assign the item to
-              let groupFieldValue = elem.getAttribute("ows_" + list.groupField);
+              let groupFieldValue = elem.getAttribute("ows_" + listConfigs.groupField);
               if (groupFieldValue) {
-                const groupSplit = this.handleMultiValues(groupFieldValue);
+                const groupSplit = this.handleMultipleSOAPValues(groupFieldValue);
 
                 //Look for "regular" values without ;# (they result in ["Single value"] array)
                 if (groupSplit.length == 1) {
@@ -1554,7 +2238,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 
                   //Create a duplicate event for each selected group value
                   groupSplit.forEach(groupName => {
-                    const eventClone = structuredClone(oEvent); //error TS2304: Cannot find name 'structuredClone'
+                    const eventClone = structuredClone(oEvent);
                     //Above duplicates the event object
                     eventClone.id = IdSvc.getNext(); //Set a new ID
 
@@ -1612,7 +2296,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           //Need to keep "&" character encoded for next SOAP call
           pagingDetails = pagingDetails.replace("&p_", "&amp;p_");
           //Query for more events
-          return this.queryList(list, pagingDetails);
+          return this.queryList(list, listConfigs, pagingDetails);
         }
       }
     })
@@ -1620,4 +2304,220 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       console.error(error);
     });
   }
+
+  private getOutlookEvents(): Promise<any[]> {
+    return Promise.all(this.props.calsAndPlans.map((calendar:ICalendarItem) => {
+      const configs = this.buildCalendarConfigs(calendar);
+      
+      //Only process valid entries
+      if (configs.visible == false || calendar.persona == null || calendar.persona.length == 0)
+        return; //skip this one
+      else
+        return this.queryCalendar(calendar, configs, null, 0);
+    }))
+  }
+
+  private async queryCalendar(calObj:ICalendarItem, calConfigs:ICalendarConfigs, existingEvent:any, skipNumber:number): Promise<void> {
+    //First Promise return but later return again from the Graph call
+    return await this.props.graphClient.then((client:MSGraphClientV3): void => {
+      const appendValidGraphEventProp = (name:string): string => {
+        //Only certain Event properties can be allowed in Graph query or an error is received:
+        //HTTP 400: Could not find a property named 'Category' on type 'Microsoft.OutlookServices.Event'.
+        switch(name) {
+          //In addition to those defined in selectFields above...
+          case "originalStartTimeZone":
+          case "originalEndTimeZone":
+          case "iCalUId":
+          case "reminderMinutesBeforeStart":
+          case "isReminderOn":
+          case "hasAttachments":
+          case "bodyPreview":
+          case "importance":
+          case "sensitivity":
+          case "isCancelled":
+          case "isOrganizer":
+          case "responseRequested":
+          case "showAs":
+          case "type":
+          case "onlineMeetingUrl":
+          case "onlineMeeting":
+          case "isOnlineMeeting":
+          case "onlineMeetingProvider":
+          case "allowNewTimeProposals":
+          case "hideAttendees":
+            return "," + name;
+        }
+        return null;
+      };
+      const fieldKeys = this.getFieldKeys();
+      
+      //Build initial list of fields to select (will be augmented by tooltip fieldKeys)
+      //singleValueExtendedProperties doesn't need to be selected (the $expand seems to include it already)
+      let selectFields = "id,organizer,createdDateTime,lastModifiedDateTime,categories,subject,body,start,end,location,isAllDay,webLink";
+      //Duplicates are OK (if categories (above) is classField and/or showAs is groupField and is part of fieldKeys)
+      selectFields += (appendValidGraphEventProp(calConfigs.classField) || "");
+      selectFields += (appendValidGraphEventProp(calConfigs.groupField) || "");
+
+      //Add fields used in the tooltip
+      fieldKeys.forEach(field => {
+        selectFields += (appendValidGraphEventProp(field) || "");
+      });
+
+      //Build API URL based on user or group calendar
+      let existingEventId: string = null;
+      if (existingEvent && existingEvent.eventId)
+        existingEventId = existingEvent.eventId;
+      let apiURL = "";
+      let resourceId = calObj.resource.split(":")[0]; //format "calendar:Id"
+      if (calObj.persona[0].personaType == "user")
+        apiURL = "/users/" + calObj.persona[0].mail + "/calendars/" + resourceId + 
+          //Single event query (for post user clicking an item) or multiple events query
+          (existingEventId ? "/events/" + existingEventId : "/calendarView");
+      else //assumed to be a group
+        apiURL = "/groups/" + calObj.persona[0].key + 
+          //Single event query (for post user clicking an item) or multiple events query
+          (existingEventId ? "/events/" + existingEventId : "/calendarView");
+
+      //Build API call variables
+      const basicQueryStringParams = (existingEventId ? '' : `startDateTime=${this.getMinDate().toISOString()}&endDateTime=${this.getMaxDate().toISOString()}`);
+      const filter = (existingEventId ? "" : (calObj.filter ? calObj.filter.trim() : ""));
+      
+      //Get calender view events
+      //@ts-ignore ("return" does work here)
+      return client.api(apiURL).query(basicQueryStringParams)
+      //TODO: 500 or higher?
+      .select(selectFields).top(500).skip(skipNumber)
+      //TODO: .filter("sensitivity ne 'private'")
+      .filter(filter)
+      //Make the charm/icon value be included
+      .expand("singleValueExtendedProperties($filter=id eq 'Integer {11000E07-B51B-40D6-AF21-CAA85EDAB1D0} Id 0x0027')")
+      //Headers -> Prefer: outlook.timezone (string) -> If not specified dates are returned in UTC
+      .get((error:GraphError, response:any, rawResponse?:any) => {
+        if (error) {
+          //console.log(error.message);
+          //Could be this in case of missing Graph scopes or user permission to the resource
+          //"code": "ErrorAccessDenied",
+          //"message": "Access is denied. Check credentials and try again."
+          //"statusCode": 403
+        }
+        else {
+          let events:(MicrosoftGraph.Event & {[key: string]:any})[] = null;
+          if (response.id) //single event
+            events = [response];
+          else //multiple events query
+            events = response.value;
+
+          events.forEach(calEvent => {
+            const oEvent = this.buildCalendarEventObject(calObj, calConfigs, fieldKeys, calEvent);
+            if (existingEvent)
+            oEvent.id = existingEvent.id; //must set back to original id to ensure it is updated
+
+            //Add group (row/swimlane)
+            let multipleValuesFound = false;
+            if (calConfigs.groupId) {
+              oEvent.group = calConfigs.groupId;
+              if (existingEventId) //need to update this existing item
+                this._dsItems.update(oEvent);
+            }
+            else if (calConfigs.groupField && this.props.groups) {
+              //Get value of group field
+              let groupFieldValue = null as string | string[];
+              switch (calConfigs.groupField) {
+                case "categories":
+                  groupFieldValue = calEvent.categories;
+                  break;
+
+                case "showAs":
+                  //MicrosoftGraph.FreeBusyStatus = "unknown" | "free" | "tentative" | "busy" | "oof" | "workingElsewhere";
+                  //Mapping option: "Unknown", "Free", "Tentative", "Busy", "Away"/Out of Office, "Working elsewhere"/Working Elsewhere
+                  groupFieldValue = calEvent.showAs.toString();
+                  break;
+
+                case "charmIcon":
+                  groupFieldValue = (calEvent.singleValueExtendedProperties && calEvent.singleValueExtendedProperties[0] &&
+                    calEvent.singleValueExtendedProperties[0].value || "");
+                  if (groupFieldValue == "None")
+                  groupFieldValue = "";
+                  break;
+
+                default:
+                  groupFieldValue = calEvent[calConfigs.groupField];
+              }
+
+              //Find the associated group to assign the item to
+              if (groupFieldValue) {
+                if (Array.isArray(groupFieldValue)) {
+                  multipleValuesFound = true;
+
+                  if (existingEventId) {
+                    //Now need to assume that there *could* have been multiple selections previously
+                    //but the item was updated to only have one (we need to remove those prior copies)
+                    //Find duplicate events and remove them
+                    const itemEvents = this._dsItems.get({
+                      filter: function (item:any) {
+                        return (item.spId == oEvent.spId); // && item.id != oEvent.id
+                      }
+                    });
+                    this._dsItems.remove(itemEvents);
+                  }
+
+                  //Create a duplicate event for each selected group value
+                  groupFieldValue.forEach(groupName => {
+                    const eventClone = structuredClone(oEvent);
+                    //Above duplicates the event object
+                    eventClone.id = IdSvc.getNext(); //Set a new ID
+                    //Map value if applicable
+                    groupName = this.getFieldMappedValue(calConfigs, calConfigs.groupField, groupName);
+
+                    //Find the associated group from it's name
+                    this.props.groups.every((group:IGroupItem) => {
+                      if (group.name == groupName) {
+                        eventClone.group = group.uniqueId;
+                        return false; //exit
+                      }
+                      else return true; //keep looping
+                    });
+
+                    //Add the clone to the DataSet
+                    this._dsItems.add(eventClone);
+                  });
+                }
+
+                //Finalize single value events
+                if (existingEventId == null && multipleValuesFound == false) {
+                  //Map value if applicable
+                  groupFieldValue = this.getFieldMappedValue(calConfigs, calConfigs.groupField, (groupFieldValue as string));
+                  //Find the associated group from it's name
+                  this.props.groups.every((group:IGroupItem) => {
+                    if (group.name == groupFieldValue) {
+                      oEvent.group = group.uniqueId;
+                      return false; //exit
+                    }
+                    else return true; //keep looping
+                  });
+                }
+              } //There is a groupFieldValue
+            } //A groupField was selected && there are this.props.groups
+
+            //Add event/item to the DataSet
+            if (existingEventId == null && multipleValuesFound == false)
+              this._dsItems.add(oEvent);
+          });
+
+          //Check if more data should be queried
+          let nextLink = response["@odata.nextLink"] as string;
+          if (nextLink) {
+            //Query for more events (get the next page)
+            const eqIndex = nextLink.lastIndexOf("=");
+            const skipNumber = Number(nextLink.substring(eqIndex + 1));
+            return this.queryCalendar(calObj, calConfigs, existingEvent, skipNumber);
+          }
+        } //no error returned
+      }) //end Graph.get()
+      .catch(value => { //value is always undefined (need to save error details from with above .get func)
+        //Just catch to prevent "Uncaught (in promise)" console error
+        //Also needed so that Promise.all correctly resolves
+      });
+    }); //end Graph client
+  } //end queryCalendar()
 }

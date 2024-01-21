@@ -16,6 +16,35 @@ div.spPropertyPaneContainer div.ms-TextField span > span.ms-TextField-descriptio
 	min-width:130px
 }
 
+/* Force dropdowns in calendars' FieldCollectionData (FCD) to be wider */
+.calendarsFCDTable > div.PropertyFieldCollectionData__panel__table-row > span > div.ms-Dropdown-container.PropertyFieldCollectionData__panel__dropdown-field {
+	min-width:105px;
+}
+
+/* Fix people picker *cell* from getting to big in the "table" with long names */
+.calendarsFCDTable > div.PropertyFieldCollectionData__panel__table-row > span:first-child {
+	max-width:180px; /* 228px is width to show same # of long characters in picker Callout */
+}
+
+/* Add a max-width on people picker
+.calendarsFCDTable > div.PropertyFieldCollectionData__panel__table-row > span > div.ms-BasePicker.ms-PeoplePicker {
+	max-width:310px;
+} */
+
+/* Force people picker suggestion callout to be wider */
+/*div.ms-Callout-container > div.ms-Callout { //> .ms-Callout-main > .msSuggestions {///
+	min-width:310px;
+}*/
+div.ms-Callout-container > div.ms-Callout div.ms-Suggestions > .ms-Suggestions-container > div > .ms-Suggestions-item > button div.ms-PeoplePicker-Persona {
+	width:unset;
+	max-width:320px;
+}
+
+/* Hide "x" button within people picker suggestions "callout" */
+.ms-Callout .ms-Suggestions .ms-Suggestions-item button.ms-Button.ms-Button--icon.ms-Suggestions-closeButton {
+	display:none;
+}
+
 /* ---------------------- */
 /* Custom classes		  */
 /* ---------------------- */

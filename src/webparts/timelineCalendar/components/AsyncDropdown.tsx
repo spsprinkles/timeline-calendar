@@ -17,6 +17,7 @@ interface IAsyncDropdownProps {
   disabled: boolean;
   stateKey: string; //Can contain invalid data (bad Site URL) that doesn't match that field's validation
   //isNewRow: boolean; //TODO: //From PropPaneConfig onCustomRender(), item.sortIdx evaluating true means it's an *existing* row (not a *new* row)
+  forceNoDelay?: boolean;
 }
 
 export interface IAsyncDropdownState {
@@ -56,12 +57,15 @@ export default class AsyncDropdown extends React.Component<IAsyncDropdownProps, 
       if (this.props.selectedKey == null && this.selectedKey != null && this.selectedKey != "temp")
         this.selectedKey = null;
 
-      if (this.props.stateKey == null)
+      if (this.props.stateKey == null) {
+        this.selectedKey = null; //Date:12/15 override to clear value if key field is cleared
+        //this.onChange(null, null); causing an error when testing
         return;
+      }
 
       if (this.props.disabled !== prevProps.disabled || this.props.stateKey !== prevProps.stateKey) {
         //console.log("Async Update current stateKey:" + this.props.stateKey + " // prevProps.stateKey: " + prevProps.stateKey);
-        this.loadOptions();
+        this.loadOptions(this.props.forceNoDelay);
       }
     }
 
@@ -139,13 +143,13 @@ export default class AsyncDropdown extends React.Component<IAsyncDropdownProps, 
 
     private onChange(event:Event, option: IDropdownOption): void {
         this.selectedKey = option.key;
-        //Reset previously selected options (not needed?)
+        //Reset previously selected option (specifically for the preselected "Row 1")
         const options: IDropdownOption[] = this.state.options;
-        // options.forEach((o: IDropdownOption): void => {
-        //   if (o.key !== option.key) {
-        //     o.selected = false;
-        //   }
-        // });
+        options.forEach((o: IDropdownOption): void => {
+          if (o.key !== option.key) {
+            o.selected = false;
+          }
+        });
         this.setState((prevState: IAsyncDropdownState, props: IAsyncDropdownProps): IAsyncDropdownState => {
           prevState.options = options;
           return prevState;

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import * as ReactDom from 'react-dom';
-import { Version } from '@microsoft/sp-core-library';
+import { DisplayMode, Version } from '@microsoft/sp-core-library';
 import { IPropertyPaneConfiguration, PropertyPaneTextField, PropertyPaneLabel, PropertyPaneToggle, PropertyPaneLink } 
   from '@microsoft/sp-property-pane';
 import { BaseClientSideWebPart } from '@microsoft/sp-webpart-base';
@@ -9,31 +9,34 @@ import { IReadonlyTheme } from '@microsoft/sp-component-base';
 import * as strings from 'TimelineCalendarWebPartStrings';
 import TimelineCalendar from './components/TimelineCalendar';
 import { ITimelineCalendarProps } from './components/ITimelineCalendarProps';
-import { ICategoryItem, IGroupItem, IListItem } from './components/IConfigurationItems';
+import { ICalendarItem, IPersonaProps, IMemberOfResult, ICategoryItem, IGroupItem, IListItem } from './components/IConfigurationItems';
 
-//Had: ICustomDropdownOption, ICustomCollectionField
-import { PropertyFieldCollectionData, CustomCollectionFieldType } from "@pnp/spfx-property-controls/lib/PropertyFieldCollectionData";
+import { PropertyFieldCollectionData, CustomCollectionFieldType, ICustomDropdownOption, ICustomCollectionField } from "@pnp/spfx-property-controls/lib/PropertyFieldCollectionData";
 import { PropertyFieldNumber } from '@pnp/spfx-property-controls/lib/PropertyFieldNumber';
 //import { PropertyFieldCodeEditor, PropertyFieldCodeEditorLanguages } from '@pnp/spfx-property-controls/lib/PropertyFieldCodeEditor';
 import { PropertyFieldMonacoEditor } from '@pnp/spfx-property-controls/lib/PropertyFieldMonacoEditor';
 //import { MonacoEditor?? } from "@pnp/spfx-controls-react/lib/MonacoEditor??";
 import { PropertyPaneWebPartInformation } from '@pnp/spfx-property-controls/lib/PropertyPaneWebPartInformation';
-import { PropertyPaneMarkdownContent } from '@pnp/spfx-property-controls/lib/PropertyPaneMarkdownContent';
+//import { PropertyPaneMarkdownContent } from '@pnp/spfx-property-controls/lib/PropertyPaneMarkdownContent';
 import { PropertyFieldMessage } from '@pnp/spfx-property-controls/lib/PropertyFieldMessage';
 import { MessageBarType } from 'office-ui-fabric-react/lib/MessageBar';
 import PnPTelemetry from "@pnp/telemetry-js";
 import MonacoPanelEditor from './components/MonacoPanelEditor';
 import { PanelType, IDropdownOption, DropdownMenuItemType } from 'office-ui-fabric-react';
 import AsyncDropdown from './components/AsyncDropdown';
-import {SPHttpClient, SPHttpClientResponse} from '@microsoft/sp-http';
+import { MSGraphClientV3, SPHttpClient, SPHttpClientResponse } from '@microsoft/sp-http';
 import { Guid } from '@microsoft/sp-core-library';
+import { GraphError } from '@microsoft/microsoft-graph-client'; //ResponseType
+import * as MicrosoftGraph from '@microsoft/microsoft-graph-types';
+import DirectoryPicker from './components/DirectoryPicker';
 
 //These are the persisted web part properties
 export interface ITimelineCalendarWebPartProps {
   description: string;
-  groups: any[];
   categories: any[];
+  groups: any[];
   lists: any[];
+  calsAndPlans: any[];
   minDays: number;
   maxDays: number;
   initialStartDays: number;
@@ -55,83 +58,62 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
 
   private _isDarkTheme: boolean = false;
   private _environmentMessage: string = '';
-  private dataCache = { //Used to store REST promises for faster retrieval within PropertyFieldCollectionData
+  private dataCache = { //Used mostly to store REST promises for faster retrieval within PropertyFieldCollectionData
     webs: {} as any,
     lists: {} as any,
     views: {} as any,
-    fields: {} as any
+    fields: {} as any,
+    memberOf: [] as IPersonaProps[],
+    calendars: {} as any,
+    calFilterQuery: {} as any
   };
-
-  //NOTE: This is fired even for prop pane changes!
-  //this.context (and .instanceId) is valid here
-  public render(): void {
-    const element: React.ReactElement<ITimelineCalendarProps> = React.createElement(TimelineCalendar,
-      {
-        description: this.properties.description,
-        isDarkTheme: this._isDarkTheme,
-        environmentMessage: this._environmentMessage,
-        hasTeamsContext: !!this.context.sdks.microsoftTeams,
-        userDisplayName: this.context.pageContext.user.displayName,
-        instanceId: this.context.instanceId,
-        categories: this.properties.categories,
-        groups: this.properties.groups,
-        lists: this.properties.lists,
-        //renderLegend: this.renderLegend.bind(this), //called from TSX, .bind needed otherwise "this" refers to the .tsx
-        getDefaultTooltip: this.getDefaultTooltip.bind(this),
-        buildDivStyles: this.buildDivStyles.bind(this),
-        context: this.context,
-        domElement: this.domElement,
-        minDays: this.properties.minDays,
-        maxDays: this.properties.maxDays,
-        initialStartDays: this.properties.initialStartDays,
-        initialEndDays: this.properties.initialEndDays,
-        holidayCategories: this.properties.holidayCategories,
-        fillFullWidth: this.properties.fillFullWidth,
-        calcMaxHeight: this.properties.calcMaxHeight,
-        singleDayAsPoint: this.properties.singleDayAsPoint,
-        overflowTextVisible: this.properties.overflowTextVisible,
-        hideItemBoxBorder: this.properties.hideItemBoxBorder,
-        //hideSocialBar: this.properties.hideSocialBar,
-        //getDatesAsUtc: this.properties.getDatesAsUtc,
-        tooltipEditor: this.properties.tooltipEditor,
-        visJsonProperties: this.properties.visJsonProperties,
-        cssOverrides: this.properties.cssOverrides
-      }
-    );
-    ReactDom.render(element, this.domElement);
-  }
-
-  //NOTE: This is fired before any onChange function from properties (i.e. MonacoEditor)
-  protected override onPropertyPaneFieldChanged(propertyPath: string, oldValue: any, newValue: any): void {
-    //Special handling for some properties
-    if (propertyPath === "groups") {
-      //Check if there were no groups but now new ones added; need to tag any lists to a group or their events won't show
-      if ((oldValue == null || oldValue.length == 0) && (newValue && newValue.length > 0) && this.properties.lists) {
-        const categoryId = (this.properties.groups[0] as IGroupItem).uniqueId; //get id for first group
-        this.properties.lists.forEach((list: IListItem) => {
-          list.groupId = categoryId;
-        })
-      }
+  private _graphClient: Promise<MSGraphClientV3> = null;
+  private _graphScopes: string[] = [];
+  private _messageListener = (event:MessageEvent) => {
+    //Look for only "local" events (ignoring OWA webshell messages: https://webshell.dodsuite.office365.us)
+    if (event.origin === window.location.origin) {
+      //event.data == 
+        //Property pane will open (also when *updating props* and when switching to other web parts, but doesn't cause following "toggled" to fire)
+        //Property pane toggled (when opened and also when closed, also when page is saved)
+      //event.timeStamp: 219218.10000002384 (will be the same for duplicated messages)
+      if (event.data == "Property pane toggled")
+        //Reset the cache
+        this.dataCache = {
+          webs: {},
+          lists: {},
+          views: {},
+          fields: {},
+          memberOf: this.dataCache.memberOf,
+          calendars: {},
+          calFilterQuery: {}
+        }
     }
-    else if (propertyPath === "visJsonProperties") {
-      //Proceed saving the data only if it's valid JSON
-      try {
-        JSON.parse(newValue);
-      }
-      catch (e) {
-        this.properties.visJsonProperties = oldValue; //Overwrite back to original value
-      }
-    }
-
-    //After this the render() function is fired followed by componentDidUpdate() in the .tsx
-    super.onPropertyPaneFieldChanged(propertyPath, oldValue, newValue);
-  }
-
+  };
+  
   //NOTE: This is fired only once once the web part is initially loading
+  //But when page is *edited* it is fired again (displayMode == 2 in this case)
+  //Also fired while already in edit mode and new web part is added (also mode #2)
   protected onInit(): Promise<void> {
+    //console.log("onInit, displayMode:" + this.displayMode.toString());
+    if (this.displayMode == DisplayMode.Edit)
+      window.addEventListener("message", this._messageListener, false);
+
     //Opt-out of PnP telemetry
     const telemetry = PnPTelemetry.getInstance();
     telemetry.optOut();
+
+    //Get reference
+    this._graphClient = this.context.msGraphClientFactory.getClient('3');
+    
+    //Just while in dev testing mode
+    /*if (this.context.isServedFromLocalhost) { //because onDisplayModeChanged is not changed
+      console.log("isServedFromLocalhost");
+      this.getUserMemberOf();
+    }*/
+
+    //Get user's groups in case Outlook Calendars collection/pane is opened
+    if (this.displayMode == DisplayMode.Edit)
+      this.getUserMemberOf();
 
     //If there's no existing data, add some default categories and groups to give the user a visual starting point/example
     if (this.properties.categories == null)
@@ -202,6 +184,125 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     });
   }
 
+  //NOTE: This is fired even for property changes made in the properties pane! (props pane is this.displayMode == 2)
+  //this.context (and .instanceId) is valid here
+  public render(): void {
+    //console.log("render, displayMode:" + this.displayMode.toString());
+    const element: React.ReactElement<ITimelineCalendarProps> = React.createElement(TimelineCalendar,
+      {
+        description: this.properties.description,
+        isDarkTheme: this._isDarkTheme,
+        environmentMessage: this._environmentMessage,
+        hasTeamsContext: !!this.context.sdks.microsoftTeams,
+        userDisplayName: this.context.pageContext.user.displayName,
+        instanceId: this.context.instanceId,
+        categories: this.properties.categories,
+        groups: this.properties.groups,
+        lists: this.properties.lists,
+        calsAndPlans: this.properties.calsAndPlans,
+        //renderLegend: this.renderLegend.bind(this), //called from TSX, .bind needed otherwise "this" refers to the .tsx
+        getDefaultTooltip: this.getDefaultTooltip.bind(this),
+        ensureValidClassName: this.ensureValidClassName.bind(this),
+        buildDivStyles: this.buildDivStyles.bind(this),
+        context: this.context,
+        graphClient: this._graphClient,
+        getGraphScopes: this.getGraphScopes.bind(this),
+        domElement: this.domElement,
+        minDays: this.properties.minDays,
+        maxDays: this.properties.maxDays,
+        initialStartDays: this.properties.initialStartDays,
+        initialEndDays: this.properties.initialEndDays,
+        holidayCategories: this.properties.holidayCategories,
+        fillFullWidth: this.properties.fillFullWidth,
+        calcMaxHeight: this.properties.calcMaxHeight,
+        singleDayAsPoint: this.properties.singleDayAsPoint,
+        overflowTextVisible: this.properties.overflowTextVisible,
+        hideItemBoxBorder: this.properties.hideItemBoxBorder,
+        //hideSocialBar: this.properties.hideSocialBar,
+        //getDatesAsUtc: this.properties.getDatesAsUtc,
+        tooltipEditor: this.properties.tooltipEditor,
+        visJsonProperties: this.properties.visJsonProperties,
+        cssOverrides: this.properties.cssOverrides
+      }
+    );
+    ReactDom.render(element, this.domElement);
+  }
+  
+  private getUserMemberOf():void {
+    if (this.displayMode == DisplayMode.Edit) {
+      this._graphClient.then((client:MSGraphClientV3): void => {
+        client.api("/me/memberOf").select("id,displayName,mail,visibility")
+        //Need to exclude security groups
+        .filter("groupTypes/any(c:c eq 'Unified')") //filter could also be "mailEnabled eq true" with &$count=true
+        .header('ConsistencyLevel', 'eventual').count() //both needed for filter to work
+        .get((error:GraphError, response:any, rawResponse?:any) => {
+          //Handle errors
+          if (error) {
+            //Nothing needed
+            console.error(error);
+          }
+          //Handle a success response
+          else {
+            if (response == null) {
+              this.dataCache.memberOf = [];
+            }
+            else {
+              //TODO: https://stackoverflow.com/questions/24806772/how-to-skip-over-an-element-in-map
+              this.dataCache.memberOf = response.value.filter((value:IMemberOfResult, index:number) => {
+                //return (value['@odata.type'] == '#microsoft.graph.group');
+                return (value.visibility != null);
+              }).map((value:IMemberOfResult, index:number):IPersonaProps => {
+                return {
+                  key: value.id,
+                  //imageInitials: '',
+                  mail: value.mail,
+                  text: value.displayName,
+                  //secondaryText: value.visibility + " group", //TODO: Third visbility type of hiddenmembership (so show only Public or Private)
+                  secondaryText: value.mail,
+                  personaType: "group"
+                }
+              });
+
+              //const groups:IMemberOfResult[] = response.value;
+              //const aGroup = groups[0];
+
+              //@odata.type: "#microsoft.graph.directoryRole"
+              //displayName: null
+              //@odata.type: "#microsoft.graph.group"
+              //console.log(aGroup.displayName);
+            }
+          }
+        });
+      });
+    }
+  }
+  
+  //NOTE: This is fired before any onChange function from properties (i.e. MonacoEditor)
+  protected override onPropertyPaneFieldChanged(propertyPath: string, oldValue: any, newValue: any): void {
+    //Special handling for some properties
+    if (propertyPath === "groups") {
+      //Check if there were no groups but now new ones added; need to tag any lists to a group or their events won't show
+      if ((oldValue == null || oldValue.length == 0) && (newValue && newValue.length > 0) && this.properties.lists) {
+        const categoryId = (this.properties.groups[0] as IGroupItem).uniqueId; //get id for first group
+        this.properties.lists.forEach((list: IListItem) => {
+          list.group = "Static:" + categoryId;
+        })
+      }
+    }
+    else if (propertyPath === "visJsonProperties") {
+      //Proceed saving the data only if it's valid JSON
+      try {
+        JSON.parse(newValue);
+      }
+      catch (e) {
+        this.properties.visJsonProperties = oldValue; //Overwrite back to original value
+      }
+    }
+
+    //After this the render() function is fired followed by componentDidUpdate() in the .tsx
+    super.onPropertyPaneFieldChanged(propertyPath, oldValue, newValue);
+  }
+
   private _getEnvironmentMessage(): Promise<string> {
     if (!!this.context.sdks.microsoftTeams) { // running in Teams, office.com or Outlook
       return this.context.sdks.microsoftTeams.teamsJs.app.getContext()
@@ -249,6 +350,11 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
   protected onDispose(): void {
     ReactDom.unmountComponentAtNode(this.domElement);
 
+    //console.log("onDispose, displayMode:" + this.displayMode.toString());
+    if (this.displayMode == DisplayMode.Edit)
+      //Remove event listener
+      window.removeEventListener("message", this._messageListener, false);
+
     //Remove the styles that were dynamically added
     const styleId = "TimelineDynStyles-" + this.instanceId.substring(24); //use last portion of GUID
     const styleElem = document.getElementById(styleId);
@@ -281,6 +387,31 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
 </div>`;
   }
 
+  private ensureValidClassName(className:string | []): string {
+    if (className == null || className.length == 0)
+      return null; //or "" or cal.className ???
+
+    if (Array.isArray(className))
+      className = (className as []).join(", ");
+
+    className = (className as string); //just for TypeScript compiling
+
+    //Calculated fields add extra content, remove it
+    if (className.indexOf(";#") != -1) { //ex: string;#CalculatedValueHere
+      const index = className.indexOf(";#");
+      className = className.substring(index+2);
+    }
+    
+    //Ensure valid CSS classes (no spaces, reserved characters, etc.)
+    className = className.replace(/\W/g, "");
+    
+    //Check if class starts with a number, which isn't valid
+    if (isNaN(Number(className.charAt(0))) == false)
+      //className = TC.settings.numCssClassPrepend + className;
+      className = "Prepend" + className;
+    return className;
+  }
+
   private buildDivStyles(categoryItem:ICategoryItem): any {
     const defaultStyle = "border-color:" + categoryItem.borderColor + "; color:" + categoryItem.textColor + ";" + 
       (categoryItem.bgColor ? " background-color:" + categoryItem.bgColor + ";" : "");
@@ -298,7 +429,52 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
       return defaultStyle;
   }
 
-  //Fired each time property pane is opened (initial and close-open actions) as well as after properties are saved/changed
+  private getGraphScopes(returnError?:boolean): string[] {
+    //Look for and save Graph scope information
+    for (const key in sessionStorage) {
+      //@ts-ignore (for startsWith)
+      if (key && typeof key == "string" && key.startsWith('{"authority":')) {
+        try {
+          const keyObj = JSON.parse(key);
+          //Find the correct Graph results entry
+          //TODO: Look for the SPO client app specifically (decode the JWT)
+          if (keyObj.scopes && keyObj.scopes.indexOf('profile openid') != -1) {
+            const scopes = keyObj.scopes.split(" ");
+            //Change "https://[dod-]graph.microsoft.[com/us]/User.Read" value to instead just get "User.Read" portion
+            this._graphScopes = scopes.map((value:string, i:Number) => {
+              if (value.indexOf('graph.microsoft.') != -1)
+                return value.split("/")[3];
+              else
+                return value;
+            //Remove the "profile", "openid", "email", and ".default" scopes
+            }).filter((value:string) => {
+              switch (value) {
+                case "profile":
+                case "openid":
+                case "email":
+                case ".default": //this one has the Graph URL prepended to it, which is why this .filter is after .map
+                  return false;
+                
+                default:
+                  return true;
+              }
+            });
+          }
+        }
+        catch (e) {}
+      }
+    }
+
+    //If returnError specified, return the error details if there were no scopes found
+    if ((this._graphScopes == null || this._graphScopes.length == 0) && returnError 
+          && sessionStorage["msal.error.description"])
+      this._graphScopes = [sessionStorage["msal.error.description"]];
+
+    return this._graphScopes;
+  }
+
+  //Fired each time property pane is opened (initial and close-open actions)
+  //Also fired after render() after property pane properties are saved/changed
   protected getPropertyPaneConfiguration(): IPropertyPaneConfiguration {
     //Save references because "this" is not available  within the "return" below
     const pageContext = this.context.pageContext;
@@ -306,14 +482,14 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     const self = this;
 
     //MarkDown for web part information (make sure to remove left indentation/spaces)
-    const webpartMD = `**Web Part Version**
+    /*const webpartMD = `**Web Part Version**
 
 ${this && this.manifest.version ? this.manifest.version : '*Unknown*'}
 
 **Web Part Instance ID**
 
 ${this.instanceId}
-`;
+`;*/
 
     //Return the PropertyPane config
     return {
@@ -354,6 +530,7 @@ ${this.instanceId}
                       title: "Category Name",
                       type: CustomCollectionFieldType.string,
                       required: true,
+                      placeholder: " " //need a space because blank just shows the title
                     },
                     {
                       id: "borderColor",
@@ -399,7 +576,7 @@ ${this.instanceId}
                         return '';
                       },
                     },
-                    {
+                    /*{
                       id: "fixColors",
                       title: "fixColors",
                       isVisible: (field, items) => {
@@ -439,7 +616,7 @@ ${this.instanceId}
                           return React.createElement("span", {class: 'legendBox vis-item vis-range', style: divStyles}, item.name);
                         }
                       }
-                    },
+                    },*/
                     {
                       id: "visible",
                       title: "Visible",
@@ -475,7 +652,7 @@ ${this.instanceId}
                   label: "Rows / Swimlanes", //Header/Label above the button
                   manageBtnLabel: "Add/Edit Rows",
                   panelProps: {
-                    type: PanelType.medium
+                    type: PanelType.largeFixed //was PanelType.medium before CSS
                   },
                   panelHeader: "Configure Rows / Swimlanes",
                   panelDescription: "Rows defined here appear as horizontal swimlanes in the timeline.",
@@ -488,12 +665,36 @@ ${this.instanceId}
                       title: "Row name",
                       type: CustomCollectionFieldType.string,
                       required: true,
+                      placeholder: " " //need a space because blank just shows the title
+                    },
+                    {
+                      id: "className",
+                      title: "CSS Class",
+                      type: CustomCollectionFieldType.string,
+                      required: false,
+                      placeholder: " ", //need a space because blank just shows the title
+                      //deferredValidationTime: 1000,
+                      //Oddly named: This is really the "perform field validation" function
+                      onGetErrorMessage: (value: string, index: number, item: IGroupItem) => {
+                        //NOTE: "this" is just the field object
+                        //Fired after deferredValidationTime
+                        
+                        //Handle blank and cleared-out values
+                        if (value == null || value.trim() == '') {
+                          //Nothing
+                        } else
+                          //Force into a valid CSS class name
+                          item.className = self.ensureValidClassName(value);
+                        
+                        //Always return, or Save button is disabled
+                        return ''; //no validation error; '' lets default checks happen
+                      }
                     },
                     {
                       id: "visible",
                       title: "Visible",
                       type: CustomCollectionFieldType.boolean,
-                      defaultValue: true,
+                      defaultValue: true
                     },
                     {  
                       id: "html", //TODO: Consider https://sharepoint.stackexchange.com/questions/277786/retrieving-data-from-rich-text-editor-in-spfx-web-part-properties
@@ -517,16 +718,21 @@ ${this.instanceId}
                       }
                     }
                   ],
-                }),
+                })
+              ]
+            },
+            {
+              groupName: "Data Source Settings",
+              groupFields: [
                 PropertyFieldCollectionData("lists", {
                   key: "lists",
                   value: this.properties.lists,
-                  label: "Lists / Calendars", //Header/label above the button
+                  label: "SharePoint Lists / Calendars", //Header/label above the button
                   manageBtnLabel: "Add/Edit Lists",
                   panelProps: {
                     type: PanelType.smallFluid
                   },
-                  panelHeader: "Configure Lists / Calendars",
+                  panelHeader: "Configure SharePoint Lists / Calendars",
                   panelDescription: "Specify the desired lists and, optionally, the views to use and category option.",
                   saveBtnLabel: "Save & close",
                   saveAndAddBtnLabel: "Add/Save & close",
@@ -1129,7 +1335,7 @@ ${this.instanceId}
                             },
                             loadOptions: () => {
                               if (value == null)
-                                onCustomFieldValidation(field.id, ''); //let the default "required" message show
+                                onCustomFieldValidation(field.id, ''); //let the default "required" message show or type a custom message
 
                               //Look for an existing fields check
                               let fieldPromise = null as any;
@@ -1199,7 +1405,8 @@ ${this.instanceId}
                                            field.TypeAsString == "User")))
                                       promiseData.push({
                                         key: field.InternalName,
-                                        text: field.Title
+                                        text: field.Title,
+                                        title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                       });
                                   });
 
@@ -1253,7 +1460,8 @@ ${this.instanceId}
                                       if (field.TypeAsString == "DateTime")
                                         promiseData.push({
                                           key: field.InternalName,
-                                          text: field.Title
+                                          text: field.Title,
+                                          title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                         });
                                     });
 
@@ -1307,7 +1515,8 @@ ${this.instanceId}
                                       if (field.TypeAsString == "DateTime")
                                         promiseData.push({
                                           key: field.InternalName,
-                                          text: field.Title
+                                          text: field.Title,
+                                          title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                         });
                                     });
 
@@ -1338,11 +1547,11 @@ ${this.instanceId}
                             stateKey: item.list,
                             onChange: (event:Event, option: IDropdownOption) => {
                               if (option == null || (option != null && option.key == "")) {
-                                //Clear related values
-                                if (item.classField)
-                                  item.classField = null;
-                                if (item.className)
-                                  item.className = null;
+                                //Clear related values (TODO: do this elsewhere)
+                                // if (item.classField)
+                                //   item.classField = null;
+                                // if (item.className)
+                                //   item.className = null;
                                 onUpdate(field.id, null);
                               }
                               else
@@ -1370,14 +1579,19 @@ ${this.instanceId}
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add applicable fields
-                                      // if (field.FieldTypeKind != 0 && (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || 
-                                      //       field.TypeAsString == "Lookup"|| field.TypeAsString == "Calculated"))
+                                      // if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
+                                      //      (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "Lookup" || 
+                                      //         field.TypeAsString == "User")))
                                       if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
-                                           (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "Lookup" || 
-                                              field.TypeAsString == "User")))
+                                        (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "MultiChoice" || 
+                                          field.TypeAsString == "Lookup" || field.TypeAsString == "LookupMulti" ||
+                                          //OutcomeChoice is "Task Outcome in the classic UI"
+                                          field.TypeAsString == "OutcomeChoice" || field.TypeAsString == "User" || field.TypeAsString == "UserMulti" ||
+                                          field.TypeAsString == "TaxonomyFieldType" || field.TypeAsString == "TaxonomyFieldTypeMulti")))
                                         promiseData.push({
                                           key: "Field:" + field.InternalName,
-                                          text: field.Title
+                                          text: field.Title,
+                                          title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                         });
                                     });
 
@@ -1428,14 +1642,8 @@ ${this.instanceId}
                             disabled: false,
                             stateKey: item.list,
                             onChange: (event:Event, option: IDropdownOption) => {
-                              if (option == null || (option != null && option.key == "")) {
-                                //Clear related values
-                                if (item.classField)
-                                  item.classField = null;
-                                if (item.className)
-                                  item.className = null;
+                              if (option == null || (option != null && option.key == ""))
                                 onUpdate(field.id, null);
-                              }
                               else
                                 onUpdate(field.id, option.key); //other values set while list data is queried (in .tsx)
                             },
@@ -1461,8 +1669,6 @@ ${this.instanceId}
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add applicable fields
-                                      // if (field.FieldTypeKind != 0 && (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || 
-                                      //       field.TypeAsString == "Lookup"|| field.TypeAsString == "Calculated"))
                                       if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
                                            (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "MultiChoice" || 
                                             field.TypeAsString == "Lookup" || field.TypeAsString == "LookupMulti" ||
@@ -1471,7 +1677,8 @@ ${this.instanceId}
                                             field.TypeAsString == "TaxonomyFieldType" || field.TypeAsString == "TaxonomyFieldTypeMulti")))
                                         promiseData.push({
                                           key: "Field:" + field.InternalName,
-                                          text: field.Title
+                                          text: field.Title,
+                                          title: field.Title + (field.Title !== field.InternalName ? ` (${field.InternalName})` : '')
                                         });
                                     });
 
@@ -1484,7 +1691,8 @@ ${this.instanceId}
                                     //Add rows/swimlanes to dropdown
                                     if (this.properties.groups && this.properties.groups.length > 0)
                                       this.properties.groups.forEach((group: IGroupItem, index) => {
-                                        if (index == 0 && item.group == null) { //for new PropFieldCollection rows, select the first group
+                                        //When sortIdx doesn't exist, it's a new row
+                                        if (item.sortIdx == null && index == 0 && item.group == null) { //When null this means it's a new row, so default select the first group so items will render somewhere
                                           promiseData.push({
                                             //key:group.uniqueId,
                                             key: "Static:" + group.uniqueId, 
@@ -1558,7 +1766,7 @@ ${this.instanceId}
                       id: "configs",  
                       title: "Advanced Configs",
                       required: false,
-                      type: CustomCollectionFieldType.custom,  
+                      type: CustomCollectionFieldType.custom,
                       onCustomRender: (field, value, onUpdate, item:IListItem, itemId, onCustomFieldValidation) => {  
                         //Provide a default value to show in the editor
                         if (value == null || value == "")
@@ -1569,7 +1777,472 @@ ${this.instanceId}
                             key: itemId,
                             disabled: (item.list ? false : true),
                             buttonText: "Advanced",
-                            headerText: 'Advanced JSON attribute editor for List configuration',
+                            headerText: 'Advanced JSON attribute editor for SharePoint List configuration',
+                            value: value,
+                            language: "json",
+                            onValueChanged: (newValue: string) => {
+                              //Proceed saving the data only if it's valid JSON
+                              try {
+                                JSON.parse(newValue); //exception if not
+                                onUpdate(field.id, newValue); //save the value
+                              }
+                              catch (e) {
+                                //Nothing needed
+                              }
+                            }
+                          })
+                        )
+                      }
+                    }
+                  ]
+                }),
+                PropertyFieldCollectionData("calsAndPlans", {
+                  key: "calsAndPlans",
+                  value: this.properties.calsAndPlans,
+                  tableClassName: "calendarsFCDTable",
+                  label: "Outlook Calendars", //Header/label above the button
+                  manageBtnLabel: "Add/Edit Calendars",
+                  panelProps: {
+                    type: PanelType.smallFluid
+                  },
+                  panelHeader: "Configure Outlook Calendars",
+                  panelDescription: "Specify the desired calendars and the category to be assigned.",
+                  saveBtnLabel: "Save & close",
+                  saveAndAddBtnLabel: "Add/Save & close",
+                  //enableSorting: true, //not necessary here as the list order doesn't matter
+                  fields: [
+                    {
+                      id: "persona",
+                      title: "User/Org Box/Group",
+                      required: true,
+                      type: CustomCollectionFieldType.custom,
+                      onCustomRender: (field, value, onUpdate, item:ICalendarItem, itemId, onCustomFieldValidation) => {  
+                        return (  
+                          React.createElement(DirectoryPicker, {
+                            //key: itemId,
+                            //uniqueId: item.uniqueId, //for testing
+                            //sortIdx: item.sortIdx, //for testing
+                            disabled: false,
+                            selectedPersonas: value,
+                            initialSuggestions: this.dataCache.memberOf,
+                            graphClient: this._graphClient,
+                            getGraphScopes: this.getGraphScopes.bind(this),
+                            onChange: (items:IPersonaProps[]) => {
+                              if (items.length == 0) {
+                                //neither helped
+                                onCustomFieldValidation(field.id, ''); //"" empty doesn't prevent
+                                onUpdate(field.id, null);
+                              }
+                              else {
+                                //Create a "trimmer" object
+                                let item = [{
+                                  key: items[0].key,
+                                  text: items[0].text,
+                                  mail: items[0].mail,
+                                  personaType: items[0].personaType
+                                } as IPersonaProps];
+                                onCustomFieldValidation(field.id, '');
+                                onUpdate(field.id, item);
+                              }
+                            }
+                          })
+                        )
+                      }
+                    },
+                    {
+                      id: "resource",  
+                      title: "Calendar",
+                      required: true,
+                      type: CustomCollectionFieldType.custom,
+                      //NOTE: Fired immediately; not honoring deferredValidationTime on other fields
+                      onCustomRender: (field, value, onUpdate, item:ICalendarItem, itemId, onCustomFieldValidation) => {
+                        return (  
+                          React.createElement(AsyncDropdown, {
+                            label: undefined,
+                            selectedKey: value,
+                            disabled: false,
+                            stateKey: (item.persona && item.persona[0] ? item.persona[0].key : null),
+                            forceNoDelay: true,
+                            onChange: (event:Event, option: IDropdownOption) => {
+                              if (option == null || (option != null && option.key == "")) {
+                                onUpdate(field.id, null);
+                                //onCustomFieldValidation(field.id, "Calendar must be selected"); //not needed as default seems to automatically be shown
+                              }
+                              else {
+                                onUpdate(field.id, option.key);
+
+                                //For user calendars, need to make sure current user has at least "view all details" permission or access denied error will be thrown getting events
+                                const persona = item.persona[0];
+                                if (persona.personaType == "user")
+                                  this._graphClient.then((client:MSGraphClientV3): void => {
+                                    const now = new Date();
+                                    let later = new Date();
+                                    later.setDate(later.getDate() + 1);
+                                    //Just try to get any event to see if access denied is returned
+                                    client.api("/users/" + persona.key + "/calendars/" + option.key + "/calendarView")
+                                    .query(`startDateTime=${now.toISOString()}&endDateTime=${later.toISOString()}`)
+                                    .select("id,subject").top(1)
+                                    .get((error:GraphError, response:any, rawResponse?:any) => {
+                                      if (error && error.code == "ErrorAccessDenied") {
+                                        onCustomFieldValidation(field.id, 'You need at least the "view all details" permission to this calendar');
+                                      }
+                                    })
+                                    .catch(reason => { //reason is undefined
+                                      //Just catch to prevent "Uncaught (in promise)" console error
+                                    })
+                                  });
+                              }
+                            },
+                            loadOptions: () => {
+                              const personaId = (item.persona[0] ? item.persona[0].key : null);
+                              const persona = item.persona[0];
+                              //onCustomFieldValidation(field.id, "At load options");
+                              
+                              //Look for an existing promise
+                              if (self.dataCache.calendars[personaId]) {
+                                /*const test1 = self.dataCache.calendars[personaId];
+                                (test1 as Promise<IDropdownOption[]>).catch(reason => {
+                                  console.warn(reason);
+                                  onCustomFieldValidation(field.id, "in reused promise catch");
+                                });*/
+                                return self.dataCache.calendars[personaId];
+                              }
+
+                              //For groups just return a "default" calendar (since there cannot be other "created" calendars like with users)
+                              if (persona.personaType == "group") {
+                                //Just "return" this simple promise
+                                return new Promise<IDropdownOption[]>((resolve, reject) => {
+                                  let promiseData:IDropdownOption[] = [];
+                                  promiseData.push({
+                                    key: "calendar:default",
+                                    text: "Calendar"
+                                  });
+                                  resolve(promiseData);
+                                });
+
+                                //TODO: Query for Planner plans
+                                //key: plan:{id}
+                              }
+
+                              //For users, query to see which calendars are available/shared
+                              const calendarsPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
+                                let errorMsg = null as string;
+                                //Get data
+                                this._graphClient.then((client:MSGraphClientV3): void => {
+                                  client.api("/users/" + persona.key + "/calendars").select("id,name,isDefaultCalendar,owner")
+                                  .get((error:GraphError, response:any, rawResponse?:any) => {
+                                    if (error) {
+                                      //When Calendars.Read[.*] Graph scope is not approved...
+                                      //code: "ErrorAccessDenied"
+                                      //message: "Access is denied. Check credentials and try again."
+
+                                      //Reset the promise cache in case of temp issue
+                                      self.dataCache.calendars[personaId] = null;
+                                      
+                                      //Provide a clearer error message in case of no permissions to calendar
+                                      if (error.message == "The specified object was not found in the store.") {
+                                        //Store error for use inside catch()
+                                        errorMsg = "No permissions to load calendars for selected user";
+                                        reject("No permissions to load calendars for selected user");
+                                        //This works here if no rejection
+                                        //onCustomFieldValidation(field.id, "message");
+                                      }
+                                      else {
+                                        errorMsg = error.message;
+                                        reject(error.message);
+                                      }
+                                    }
+                                    else {
+                                      let promiseData:IDropdownOption[] = [];
+                                      // promiseData.push({
+                                      //   key: "", //blank
+                                      //   text: ""
+                                      // });
+
+                                      const calendars:MicrosoftGraph.Calendar[] = response.value;
+                                      calendars.forEach(calendar => {
+                                        //Exclude other users' calendars shared with the selected user
+                                        if (calendar.owner.address != persona.mail)
+                                          return;
+
+                                        //Ignore these known calendars also in case the person selects themself
+                                        if (calendar.name != "United States holidays" && calendar.name != "Birthdays")
+                                          promiseData.push({
+                                            key: "calendar:" + calendar.id,
+                                            text: calendar.name
+                                          });
+                                      });
+                                      resolve(promiseData);
+                                      onCustomFieldValidation(field.id, ''); //Show default msg
+                                    }
+                                  })
+                                  .catch(reason => { //even with no reject above, this is undefined
+                                    onCustomFieldValidation(field.id, errorMsg);
+                                  })
+
+                                  /* None of these worked
+                                  .get().then(response => {
+                                    let promiseData:IDropdownOption[] = [];
+                                    promiseData.push({
+                                      key: "", //blank
+                                      text: ""
+                                    });
+
+                                    const calendars:MicrosoftGraph.Calendar[] = response.value;
+                                    calendars.forEach(calendar => {
+                                      //Exclude other users' calendars shared with the selected user
+                                      if (calendar.owner.address != persona.mail)
+                                        return;
+
+                                      //Ignore these known calendars also in case the person selects themself
+                                      if (calendar.name != "United States holidays" && calendar.name != "Birthdays")
+                                        promiseData.push({
+                                          key: calendar.id,
+                                          text: calendar.name
+                                        });
+                                    });
+                                    resolve(promiseData);
+                                  //Handle any errors
+                                  })//, failureReason => {
+                                  .catch((error:GraphError) => {
+                                    // If only given "Can view titles and locations" (not Can view all details+),
+                                    //   when querying the calendar this error is produced:
+                                    // code: "ErrorAccessDenied"
+                                    // message: "Access is denied. Check credentials and try again."
+
+                                    //Reset the promise cache in case of temp issue
+                                    self.dataCache.calendars[personaId] = null;
+                                          
+                                    //Provide a clearer error message in case of no permissions to calendar
+                                    if (error.message == "The specified object was not found in the store.") {
+                                      //reject("something");
+                                      onCustomFieldValidation(field.id, "No permissions to load calendars for selected user");
+                                    }
+                                    else {
+                                      onCustomFieldValidation(field.id, error.message);
+                                      reject();
+                                    }
+                                  })*/
+                                });
+                              });
+
+                              //Providing no value
+                              // calendarsPromise.catch(reason => {
+                              //   console.log(reason); //has access to reject msg
+                              //   onCustomFieldValidation(field.id, "bottom catch"); //not shown (because Uncaught (in promise) error or get catch message shown instead)
+                              // });
+
+                              //Store promise in cache and return
+                              self.dataCache.calendars[personaId] = calendarsPromise;
+                              return calendarsPromise;
+                            }
+                          })
+                        )
+                      }
+                    },
+                    //Custom filter query for calendar items
+                    {
+                      id: "filter",
+                      title: "Filter Query",
+                      /*isVisible: (field:ICustomCollectionField, items:ICalendarItem[]):boolean => {
+                        if (this.properties.groups && this.properties.groups.length > 0)
+                          return true;
+                        else
+                          return false;
+                      },*/
+                      disable: (item:ICalendarItem):boolean => {
+                        return (item.persona == null || item.persona.length == 0 || item.resource == null ? true : false);
+                      },
+                      placeholder: " ", //need a space because blank just shows the title
+                      type: CustomCollectionFieldType.string,
+                      required: false,
+                      deferredValidationTime: 1000,
+                      //Oddly named: This is really the "perform field validation" function
+                      onGetErrorMessage: (value: string, index: number, item: ICalendarItem) => {
+                        //NOTE: "this" is just the field object
+                        //Fired after deferredValidationTime
+
+                        //Handle blank and cleared-out values
+                        if (value == null || value.trim() == '')
+                          return ''; //no validation error; '' lets default checks happen
+
+                        //Look for existing check and return it's promise
+                        if (self.dataCache.calFilterQuery[value])
+                          return self.dataCache.calFilterQuery[value]
+
+                        //Try a calendar Graph call to test if query is valid
+                        const promise = new Promise<string>((resolve, reject) => {
+                          this._graphClient.then((client:MSGraphClientV3): void => {
+                            //Build API URL based on user or group calendar
+                            let apiURL = "";
+                            let resourceId = item.resource.split(":")[1]; //format "calendar:id"
+                            if (item.persona[0].personaType == "user")
+                              apiURL = "/users/" + item.persona[0].mail + "/calendars/" + resourceId + "/calendarView";
+                            else //assumed to be a group
+                              apiURL = "/groups/" + item.persona[0].key + "/calendarView";
+
+                            const now = new Date();
+                            let later = new Date();
+                            later.setDate(later.getDate() + 1);
+                            
+                            //Get sample calender view events just to test the input query
+                            //return client.api(apiURL).query(`startDateTime=${this.getMinDate().toISOString()}&endDateTime=${this.getMaxDate().toISOString()}`)
+                            client.api(apiURL).query(`startDateTime=${now.toISOString()}&endDateTime=${later.toISOString()}`)
+                            .select("id,subject").top(1)
+                            .filter(value.trim())
+                            .get((error:GraphError, response:any, rawResponse?:any) => {
+                              if (error) {
+                                resolve(error.message);
+                              }
+                              else {
+                                resolve(''); //no validation error
+                              }
+                            })
+                            .catch(reason => { //reason is undefined
+                              //Just catch to prevent "Uncaught (in promise)" console error
+                            });
+                          });
+                        });
+
+                        //Store the promise in cache and return
+                        self.dataCache.calFilterQuery[value] = promise;
+                        return promise;
+                      }
+                    },
+                    {
+                      id: "category",
+                      title: "Category",
+                      disable: (item:ICalendarItem):boolean => {
+                        return (item.persona == null || item.persona.length == 0 ? true : false);
+                      },
+                      placeholder: " ", //need a space because blank just shows the title
+                      type: CustomCollectionFieldType.dropdown,
+                      required: false,
+                      //NOTE: Only fired when *initialy* rendered, not after other fields are changed
+                      options: (fieldId: string, item: ICalendarItem) => {
+                        let options: ICustomDropdownOption[] = [
+                          //Add blank entry
+                          {key: "", text: ""},
+                          //Add fields header
+                          {
+                            key: "fieldsHeader",
+                            text: "Category Field",
+                            itemType: DropdownMenuItemType.Header
+                          },
+                          //Add fields from Outlook events
+                          { key: "Field:categories", text: "Categories" },
+                          { key: "Field:showAs", text: "Show As" },
+                          { key: "Field:charmIcon", text: "Charm/Icon" },
+
+                          //Add static header
+                          {
+                            key: "staticHeader",
+                            text: "Static Category",
+                            itemType: DropdownMenuItemType.Header
+                          }
+                        ];
+                        
+                        //Add categories to dropdown
+                        if (this.properties.categories && this.properties.categories.length > 0)
+                          this.properties.categories.forEach((category:ICategoryItem) => {
+                            options.push({
+                              key: "Static:" + category.uniqueId, 
+                              text: category.name
+                            });
+                          });
+                        else
+                          options.push({
+                            key: "noStaticValues",
+                            text: "No categories created",
+                            disabled: true
+                          });
+
+                        return options;
+                      }
+                    },
+                    {
+                      id: "group",
+                      title: "Row/Swimlane",
+                      isVisible: (field:ICustomCollectionField, items:ICalendarItem[]):boolean => {
+                        if (this.properties.groups && this.properties.groups.length > 0)
+                          return true;
+                        else
+                          return false;
+                      },
+                      disable: (item:ICalendarItem):boolean => {
+                        return (item.persona == null || item.persona.length == 0 ? true : false);
+                      },
+                      placeholder: " ", //need a space because blank just shows the title
+                      type: CustomCollectionFieldType.dropdown,
+                      required: false,
+                      //NOTE: Only fired when *initialy* rendered, not after other fields are changed
+                      options: (fieldId: string, item: IListItem) => {
+                        let options: ICustomDropdownOption[] = [
+                          //Add blank entry
+                          {key: "", text: ""},
+                          //Add fields header
+                          {
+                            key: "fieldsHeader",
+                            text: "Row/Swimlane Field",
+                            itemType: DropdownMenuItemType.Header
+                          },
+                          //Add fields from Outlook events
+                          { key: "Field:categories", text: "Categories" },
+                          { key: "Field:showAs", text: "Show As" },
+                          { key: "Field:charmIcon", text: "Charm/Icon" },
+                          
+                          //Add static header
+                          {
+                            key: "staticHeader",
+                            text: "Static Row/Swimlane",
+                            itemType: DropdownMenuItemType.Header
+                          }
+                        ];
+
+                        //Add rows/swimlanes to dropdown
+                        if (this.properties.groups && this.properties.groups.length > 0)
+                          this.properties.groups.forEach((group: IGroupItem, index) => {
+                            if (index == 0 && item.group == null) { //When null this means it's a new row, so default select the first group so items will render somewhere
+                              options.push({
+                                //key:group.uniqueId,
+                                key: "Static:" + group.uniqueId, 
+                                text:group.name,
+                                selected:true
+                              });
+                              item.group = "Static:" + group.uniqueId; //needed to actually have a value set in case the user doesn't change it
+                            }
+                            else
+                            options.push({
+                                key:"Static:" + group.uniqueId,
+                                text:group.name
+                              });
+                          });
+                        else
+                        options.push({
+                            key: "noStaticValues",
+                            text: "No rows created",
+                            disabled: true
+                          });
+
+                        return options;
+                      }
+                    },
+                    {
+                      id: "configs",  
+                      title: "Advanced Configs",
+                      required: false,
+                      type: CustomCollectionFieldType.custom,
+                      onCustomRender: (field, value, onUpdate, item:ICalendarItem, itemId, onCustomFieldValidation) => {  
+                        //Provide a default value to show in the editor
+                        if (value == null || value == "")
+                          value = "{\r\n  \"visible\": true\r\n}";
+
+                        return (
+                          React.createElement(MonacoPanelEditor, {
+                            key: itemId,
+                            disabled: (item.persona == null || item.persona.length == 0 ? true : false),
+                            buttonText: "Advanced",
+                            headerText: 'Advanced JSON attribute editor for Outlook Calendar configuration',
                             value: value,
                             language: "json",
                             onValueChanged: (newValue: string) => {
@@ -1761,14 +2434,11 @@ ${this.instanceId}
             {
               groupName: "About",
               groupFields: [
-                PropertyPaneMarkdownContent({
-                  markdown: `**Reference & Support**
-
-Use the following links to access documentation and support as well as to report any issues or to submit an idea for a new feature.`,
-//[milBook Group/Project (DoD CAC-login)](https://www.milsuite.mil/book/groups/m365-support/projects/timeline-calendar/)
-//
-//[GitHub Repository (public access)](https://github.com/spsprinkles/timeline-calendar/)`,
-                  key: "supportInfo"
+                PropertyPaneWebPartInformation({
+                  //No margin-top style needed
+                  description: `<div style="margin-bottom:5px"><b>Reference & Support</b></div>
+                    <div style="margin-bottom:5px">Use the following links to access documentation and support as well as to report any issues or to submit an idea for a new feature.</div>`,
+                  key: 'supportInfo'
                 }),
                 PropertyPaneLink('',{
                   target: '_blank',
@@ -1780,14 +2450,26 @@ Use the following links to access documentation and support as well as to report
                   href: "https://github.com/spsprinkles/timeline-calendar/",
                   text: "GitHub Repository (public access)"
                 }),
-                PropertyPaneMarkdownContent({
-                  markdown: webpartMD,
-                  key: "webpartInfo"
+                // PropertyPaneMarkdownContent({
+                //   markdown: webpartMD,
+                //   key: "webpartInfo"
+                // }),
+                PropertyPaneWebPartInformation({
+                  description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Version</b></div>
+                    <div>${this && this.manifest.version ? this.manifest.version : '*Unknown*'}</div>
+                    <div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Instance ID</b></div>
+                    <div>${this.instanceId}</div>`,
+                  key: 'wpInfo'
                 }),
                 PropertyPaneWebPartInformation({
-                  description: `<div><b>Author</b></div>
+                  description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Author</b></div>
                     <div>Michael Vasiloff <a href="https://www.linkedin.com/in/michaelvasiloff" target="_blank">[LinkedIn]</a> <a href="https://github.com/mikevasiloff" target="_blank">[GitHub]</a> <a href="https://www.milsuite.mil/book/people/michael.d.vasiloff" target="_blank">[milBook]</a></div>`,
                   key: 'authors'
+                }),
+                PropertyPaneWebPartInformation({
+                  description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Graph API Scopes (Tenant Approved)</b></div>
+                    <div>${this.getGraphScopes(true).join(", ")}</div>`,
+                  key: 'graphScopes'
                 })
               ]
             }

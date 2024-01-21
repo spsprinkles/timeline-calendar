@@ -16,6 +16,7 @@ interface IMonacoPanelEditorProps {
 
 export interface IMonacoPanelEditorState {
   isOpen: boolean;
+  //saveDisabled: boolean;
 }
  /*
  When instantiating this within the PropPaneConfig...
@@ -35,7 +36,8 @@ export default class MonacoPanelEditor extends React.Component<IMonacoPanelEdito
     constructor(props: IMonacoPanelEditorProps, state: IMonacoPanelEditorState) {
       super(props);
       this.state = {
-        isOpen: false
+        isOpen: false,
+        //saveDisabled: false
       };
 
       //To make this.setState work correctly
@@ -82,6 +84,8 @@ export default class MonacoPanelEditor extends React.Component<IMonacoPanelEdito
                 onValueChange={(newValue: string) => {
                     //Value is only temp right now; see "closePanel" function
                     this.tempValue = newValue;
+                    //Tried checking for invalid JSON input to disable the Save button,
+                    //but onValueChanged is *not* called if user changes JSON back to original input after changing
                 }}
                 language={this.props.language}
                 theme='vs-dark' />
@@ -93,6 +97,11 @@ export default class MonacoPanelEditor extends React.Component<IMonacoPanelEdito
     private btnHtmlHandler(): void {
         this.setState({isOpen: true});
     }
+
+    // private saveBtnDisabled(value:boolean): void {
+    //   if (this.state.saveDisabled != value)
+    //     this.setState({saveDisabled: value});
+    // }
 
     //Checks if content should be saved (only when Save button is clicked)
     private closePanel = (doSave: boolean) => {
