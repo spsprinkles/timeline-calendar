@@ -6,12 +6,13 @@
 ![Node.js v16](https://img.shields.io/badge/Node.js-v16-green.svg)
 ![SPO](https://img.shields.io/badge/SharePoint%20Online-Compatible-green.svg)
 
-Use the Timeline Calendar web part to pull in data from multiple sources and render them together in a dynamic, filterable timeline view. Options are available to easily adjust how the timeline behaves and there is support for making advanced configuration changes to refine the look and behavior of the timeline.
+Use the Timeline Calendar web part to pull in data from multiple sources and render them together in a dynamic, filterable timeline view. This includes SharePoint lists (and "classic" calendars) as well as Outlook calendars (including Microsoft 365 Group calendars). Options are available to easily adjust how the timeline behaves and there is support for making advanced configuration changes to refine the look and behavior of the timeline.
 
 ## Version history
 
 | Version | Date             | Comments        |
 | ------- | ---------------- | --------------- |
+| 0.6.0   | January 21, 2024 | [New features & bug fixes](https://github.com/spsprinkles/timeline-calendar/releases) |
 | 0.5.3   | November 27, 2023 | [Bug fixes](https://github.com/spsprinkles/timeline-calendar/releases) |
 | 0.5.2   | October 20, 2023 | Initial release |
 
