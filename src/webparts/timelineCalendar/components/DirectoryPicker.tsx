@@ -194,7 +194,13 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
               if (Array.isArray(values[1])) //typeof values[1] == "object"
                 personas = personas.concat(values[1] as IPersonaProps[]);
 
-              //Check for errors to show dialog message
+              //Check if actual error message is in storage (repeat API queries instead return "Token request previously failed")
+              if (values[0] === "Token request previously failed")
+                values[0] = (sessionStorage["msal.error.description"] || "Token request previously failed");
+              if (values[1] === "Token request previously failed")
+                values[1] = (sessionStorage["msal.error.description"] || "Token request previously failed");
+
+              //Default values; check next for any errors to then show dialog message
               let hideDialog = true;
               let errorHeader:string = undefined;
               let errorMsg:string = undefined;
@@ -202,17 +208,13 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
 
               //Look for CAS policy error (should be in both queries but just check the first)
               //"AADSTS53003: Access has been blocked by Conditional Access policies. The access policy does not allow token issuance. Trace ID: 53f94e25-27a1-4f11-8318-b4c794570800 Correlation ID: 003f1386-5365-4a10-9f5b-f762e1788619 Timestamp: 2023-12-28 13:51:19Z"
-              //Could also be "Token request previously failed" for same CAS policy after continued searches
               //@ts-ignore (for startsWith)
-              if (typeof values[0] === "string" && (values[0].startsWith("AADSTS53003:") || values[0] === "Token request previously failed")) {
+              if (typeof values[0] === "string" && values[0].startsWith("AADSTS53003:")) {
                 //error.code == "InteractionRequiredAuthError" // error.statusCode == -1
                 hideDialog = false;
                 errorHeader = "Graph API token cannot be generated";
-                errorMsg = "Your current sign-in may be from a \"location\" that is restricted. Please connect to your organization's network or VPN and re-sign in before trying again.";
-                if (values[0] === "Token request previously failed")
-                  errorSubMsg = (sessionStorage["msal.error.description"] || ""); //Show prior MSAL error
-                else
-                  errorSubMsg = values[0];
+                errorMsg = "Your current sign in is from a location or device that is restricted. Please connect to your organization's network or VPN and sign out/sign in before trying again.";
+                errorSubMsg = values[0];
               }
               else {
                 //Look for permission error messages (due to lack of approved Graph scopes)
@@ -229,24 +231,25 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                   else
                     errorMsg = "<em>groups</em>. Your results will be limited to just users."
                 }
-                //Similar check for lack of approved Graph scopes due to none ever having been approved
-                //@ts-ignore (for startsWith)
-                if (typeof values[0] === "string" && values[0].startsWith("AADSTS65001:")) { //"AADSTS65001: The user or administrator has not consented to use the application with ID..."
-                  //hideDialog = false;
-                  errorMsg = "<em>users</em> and <em>groups</em>.";
-                }
 
+                //Similar check for lack of approved Graph scopes due to none ever having been approved
+                //"AADSTS65001: The user or administrator has not consented to use the application with ID..."
+                //@ts-ignore (for startsWith)
+                if (typeof values[0] === "string" && values[0].startsWith("AADSTS65001:"))
+                  errorMsg = "<em>users</em> and <em>groups</em>.";
+
+                //Set sub-error message details if an error was found
                 if (errorMsg) {
                   //const graphScopes = this.props.getGraphScopes();
                   errorHeader = "Graph API searching permissions"; //had "not approved"
                   errorMsg = "Your SharePoint tenant-level admins have not approved the permissions needed to <strong>search</strong> for " 
                     + errorMsg;// + " To view the currently approved Graph API scopes, refer to the last page of the properties editing panel of this web part.";
-                  errorSubMsg = "Please contact them (submit a ticket) and point them to the documentation links provided in the last page of the editing panel within this web part.";
+                  errorSubMsg = "These permissions are required for this feature to work. Further details are in the documentation links provided in the last page of the editing panel within this web part.";
                   
-                  //Check if message should be displayed
+                  //Check if permissions error message should be displayed
                   const sessionVar = sessionStorage["TCWP-GraphPermsDirSearch"] as string;
                   if (!sessionVar) {
-                    //No prior check in storage
+                    //No prior check in storage for this session
                     hideDialog = false;
                     sessionStorage["TCWP-GraphPermsDirSearch"] = "Performed";
                   }
