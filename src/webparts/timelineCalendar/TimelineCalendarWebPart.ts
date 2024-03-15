@@ -235,6 +235,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
         //Need to exclude security groups
         .filter("groupTypes/any(c:c eq 'Unified')") //filter could also be "mailEnabled eq true" with &$count=true
         .header('ConsistencyLevel', 'eventual').count() //both needed for filter to work
+        .orderby("displayName") //ascending is default
         .get((error:GraphError, response:any, rawResponse?:any) => {
           //Handle errors
           if (error) {
@@ -919,6 +920,12 @@ ${this.instanceId}
                                           else {
                                             const ignoredLists = [
                                               {
+                                                //Title: format of "19:dod:GUID@thread.skype_wiki", but URL is different
+                                                BaseTemplate: 100,
+                                                Hidden: true,
+                                                WebRelativeUrl: "threadskype_w" //only the ending is checked/matched
+                                              },
+                                              {
                                                 BaseTemplate: 160,
                                                 Hidden: true,
                                                 WebRelativeUrl: "/Access Requests"
@@ -1344,10 +1351,11 @@ ${this.instanceId}
                                 fieldPromise = new Promise<[]>((resolve, reject) => {
                                   //Reference: https://learn.microsoft.com/en-us/previous-versions/office/developer/sharepoint-2010/ms428806(v=office.14)
                                     //OutputType == 2 per above for text-based Calculated columns
+                                    //OutputType == 4 per above for DateTIme-based Calculated columns
                                   
                                   //TODO: Add to $select: ,Choices
                                   //  so that if selected, show user modal asking if these should be added to list of Categories
-                                  spHttpClient.get(item.siteUrl + "/_api/web/lists('" + item.list + "')/fields?$select=Id,InternalName,Title,ReadOnlyField,FieldTypeKind,TypeAsString&$filter=TypeAsString ne 'Computed' and Hidden eq false", SPHttpClient.configurations.v1) //was: ReadOnlyField eq false and 
+                                  spHttpClient.get(item.siteUrl + "/_api/web/lists('" + item.list + "')/fields?$select=Id,InternalName,Title,ReadOnlyField,TypeAsString,OutputType&$filter=TypeAsString ne 'Computed' and Hidden eq false", SPHttpClient.configurations.v1) //was: ReadOnlyField eq false and 
                                     .then((response: SPHttpClientResponse) => {
                                       if (response.ok) {
                                         //TODO: Consider .text() here and then try/catch with JSON.parse
@@ -1449,15 +1457,10 @@ ${this.instanceId}
                                 const returnPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
                                   fieldPromise.then((fields:[]) => {
                                     let promiseData:IDropdownOption[] = [];
-                                    //Add a blank option
-                                    // promiseData.push({
-                                    //   key: "", //blank
-                                    //   text: ""
-                                    // });
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add date fields
-                                      if (field.TypeAsString == "DateTime")
+                                      if (field.TypeAsString == "DateTime" || (field.TypeAsString == "Calculated" && field.OutputType == 4))
                                         promiseData.push({
                                           key: field.InternalName,
                                           text: field.Title,
@@ -1512,7 +1515,7 @@ ${this.instanceId}
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add date fields
-                                      if (field.TypeAsString == "DateTime")
+                                      if (field.TypeAsString == "DateTime" || (field.TypeAsString == "Calculated" && field.OutputType == 4))
                                         promiseData.push({
                                           key: field.InternalName,
                                           text: field.Title,
@@ -2066,6 +2069,13 @@ ${this.instanceId}
                         if (value == null || value.trim() == '')
                           return ''; //no validation error; '' lets default checks happen
 
+                        //Help remove "$filter=" (and variants without $) if user entered it
+                        const filterSplit = value.trim().split("filter=");
+                        if (filterSplit[0].length <= 2 && filterSplit[1] != "") {
+                          item.filter = filterSplit[1]; //Update the field value
+                          value = item.filter;
+                        }
+
                         //Look for existing check and return it's promise
                         if (self.dataCache.calFilterQuery[value])
                           return self.dataCache.calFilterQuery[value]
@@ -2454,6 +2464,7 @@ ${this.instanceId}
                 //   markdown: webpartMD,
                 //   key: "webpartInfo"
                 // }),
+                //NOTE: The manifest.version value comes from package.json (not package-solution.json)
                 PropertyPaneWebPartInformation({
                   description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Version</b></div>
                     <div>${this && this.manifest.version ? this.manifest.version : '*Unknown*'}</div>

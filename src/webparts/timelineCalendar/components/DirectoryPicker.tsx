@@ -118,7 +118,7 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                 .filter("userType eq 'Member'") //cannot filter on userType with just User.ReadBasic.All perms
                 .search(`"displayName:${encodedQuery}" OR "mail:${encodedQuery}"`)
                 .header('ConsistencyLevel', 'eventual')
-                //.orderby ???
+                .orderby("displayName") //ascending is default
                 //.count(true)
                 .get((error:GraphError, response:any, rawResponse?:any) => {
                   if (error)
@@ -157,6 +157,7 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                 //Switch to search instead to match portion of group name
                 .search(`"displayName:${encodedQuery}" OR "mail:${encodedQuery}"`)
                 .header('ConsistencyLevel', 'eventual')
+                .orderby("displayName") //ascending is default
                 .get((error:GraphError, response:any, rawResponse?:any) => {
                   if (error)
                     resolve(error.message);

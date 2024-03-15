@@ -25,11 +25,12 @@ As of version 0.6.0, the following [**delegated**](https://learn.microsoft.com/e
 
 Refer to the [releases page](https://github.com/spsprinkles/timeline-calendar/releases) for specific details.
 
-| Version | Date             | Comments        |
-| ------- | ---------------- | --------------- |
-| 0.6.0   | January 21, 2024 | New features (including Outlook calendar support) & bug fixes |
+| Version | Date              | Comments        |
+| ------- | ----------------- | --------------- |
+| 0.6.1   | March 15, 2024    | Several bug fixes |
+| 0.6.0   | January 21, 2024  | New features (including Outlook calendar support) & bug fixes |
 | 0.5.3   | November 27, 2023 | Several bug fixes |
-| 0.5.2   | October 20, 2023 | Initial release |
+| 0.5.2   | October 20, 2023  | Initial release |
 
 ## Disclaimer
 
