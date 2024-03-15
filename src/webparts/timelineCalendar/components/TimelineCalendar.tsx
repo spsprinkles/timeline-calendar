@@ -23,6 +23,7 @@ import * as MicrosoftGraph from '@microsoft/microsoft-graph-types';
 //import { Dialog, DialogType, DialogFooter } from '@fluentui/react/lib/Dialog';
 //import { DefaultButton } from '@fluentui/react/lib/Button'; //PrimaryButton
 //import { TeachingBubbleContentBase } from 'office-ui-fabric-react';
+import { filterXSS, whiteList } from 'xss';
 
 //declare const window: any; //temp TODO
 
@@ -305,6 +306,70 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     )
   }
 
+  private filterTextForXSS(input:string): string {
+    //Escape additional elements besides just <script>
+    //const whiteList = xss.getDefaultWhiteList(); //or xss.whiteList;
+    input = input.replace(/javascript:/g, ''); //Extra protection for IE
+    input = input.replace(/&#106;&#97;&#118;&#97;&#115;&#99;&#114;&#105;&#112;&#116;&#58;/g, '');
+    input = input.replace(/&#0000106&#0000097&#0000118&#0000097&#0000115&#0000099&#0000114&#0000105&#0000112&#0000116&#0000058/g, '');
+    input = input.replace(/&#x6A&#x61&#x76&#x61&#x73&#x63&#x72&#x69&#x70&#x74&#x3A/g, '');
+
+    //Add SVG & other elements (no attributes, but that's handled later)
+    whiteList.svg = ['xmlns', 'height', 'width', 'preserveaspectratio', 'viewbox', 'width', 'x', 'y'];
+    whiteList.circle = ['cx', 'cy', 'r', 'pathlength'];
+    whiteList.clippath = ['clippathunits'];
+    whiteList.defs = [];
+    whiteList.desc = [];
+    whiteList.ellipse = ['cx', 'cy', 'rx', 'ry', 'pathlength'];
+    whiteList.filter = ['x', 'y', 'width', 'height', 'filterunits', 'primitiveunits'];
+    whiteList.foreignobject = ['x', 'y', 'width', 'height'];
+    whiteList.g = [];
+    whiteList.hatch = [];
+    whiteList.hatchpath = [];
+    whiteList.image = ['x', 'y', 'width', 'height', 'href', 'preserveaspectratio'];
+    whiteList.line = ['x1', 'x2', 'y1', 'y2', 'pathlength'];
+    whiteList.lineargradient = ['x1', 'x2', 'y1', 'y2', 'gradientunits', 'gradienttransform', 'href', 'spreadmethod'];
+    whiteList.marker = ['markerheight', 'markerunits', 'markerwidth', 'orient', 'preserveaspectratio', 'refx', 'refy', 'viewbox'];
+    whiteList.mask = ['height', 'maskcontentunits', 'maskunits', 'x', 'y', 'width'];
+    whiteList.path = ['d', 'pathlength'];
+    whiteList.pattern = ['height', 'href', 'patterncontentunits', 'patterntransform', 'patternunits', 'preserveaspectratio', 'viewbox', 'width', 'x', 'y'];
+    whiteList.polygon = ['points', 'pathlength'];
+    whiteList.polyline = ['points', 'pathlength'];
+    whiteList.radialgradient = ['cx', 'cy', 'fr', 'fx', 'fy', 'gradientunits', 'gradienttransform', 'href', 'r', 'spreadmethod'];
+    whiteList.rect = ['x', 'y', 'width', 'height', 'rx', 'ry', 'pathlength'];
+    whiteList.set = ['to'];
+    whiteList.stop = ['offset', 'stop-color', 'stop-opacity'];
+    whiteList.switch = [];
+    whiteList.symbol = ['height', 'preserveaspectratio', 'refx', 'refy','viewbox', 'width', 'x', 'y'];
+    whiteList.text = ['x', 'y', 'dx', 'dy', 'rotate', 'lengthadjust', 'textlength'];
+    whiteList.textpath = ['href', 'lengthaadjust', 'method', 'path', 'side', 'spacing', 'startoffset', 'textlength'];
+    whiteList.title = [];
+    whiteList.tspan = ['x', 'y', 'dx', 'dy', 'rotate', 'lengthadjust', 'textlength'];
+    whiteList.use = ['href', 'x', 'y', 'width', 'height'];
+    whiteList.view = ['viewbox', 'preserveaspectratio'];
+
+    //Documentation: https://jsxss.com/en/options.html
+    input = filterXSS(input, {
+      whiteList: whiteList,
+      stripIgnoreTagBody: true, //this would completely remove <iframe> vs. escaping it
+      //attributes *not* in the whitelist for a tag
+      onIgnoreTagAttr: function(tag:string, name:string, value:string, isWhiteAttr:boolean) {
+        // If a string is returned, the value would be replaced with this string
+        // If return nothing, then keep default (remove the attribute)
+        //name is already lowercased
+        //must return as full string: style="font-weight:bold"
+        
+        if (name == "id" || name == "style" || name == "class" || name == "title")
+          return name + '="' + value + '"';
+        
+        if ((tag == "g" || tag == "hatch" || tag == "hatchpath") && name != "onload")
+          return name + '="' + value + '"';
+      }
+    });
+
+    return input;
+  }
+
   //Pass in the objects to merge as arguments (for a deep extend, set the first argument to true)
   //Cannot use Object.assign(options, userOptions) instead because it doesn't do deep property adding
   //TODO: Use this? https://developer.mozilla.org/en-US/docs/Web/API/structuredClone
@@ -363,11 +428,19 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     if (d == null)
 			return null;
 		
+    let theDate = null;
+
 		//Check for UTC/Zulu time
 		if (d.indexOf("Z") != -1)
-			return new Date(d);
+			theDate = new Date(d);
 		else
-			return new Date(d.replace(" ", "T")); //needed for IE
+			theDate = new Date(d.replace(" ", "T")); //needed for IE
+    
+    //Check for invalid date (from calculated columns for example)
+    if (isNaN(theDate.getTime()))
+      return null;
+    else
+      return theDate;
   }
 
   private options: any = { //TimelineOptions
@@ -391,11 +464,13 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       template: (item:any, elem:HTMLElement) => {
         if (this.props.tooltipEditor == null || this.props.tooltipEditor == "") {
           const handleTemplate = Handlebars.compile(this.props.getDefaultTooltip());
-          return handleTemplate(item);
+          const strResult = handleTemplate(item);
+          return this.filterTextForXSS(strResult);
         }
         else {
           const handleTemplate = Handlebars.compile(this.props.tooltipEditor);
-          return handleTemplate(item);
+          const strResult = handleTemplate(item);
+          return this.filterTextForXSS(strResult);
         }
       }
     },
@@ -1236,8 +1311,12 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   // }
   // `;
 
-    if (this.props.cssOverrides)
-      styleHtml += "/* CSS class overrides */\r\n" + this.props.cssOverrides; //built-in protections for returning/encoding <script> as \x3Cscript>
+    if (this.props.cssOverrides) {
+      let cssOverrides = this.props.cssOverrides.replace(/javascript:/g, ''); //Extra protection for IE
+      cssOverrides = filterXSS(cssOverrides);
+
+      styleHtml += "/* CSS class overrides */\r\n" + cssOverrides;
+    }
 
     //Add override for default holiday class
     /* Special event items */
@@ -1350,6 +1429,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         if (g.html) {
           const handleTemplate = Handlebars.compile(g.html);
           theContent = handleTemplate(g);
+          theContent = this.filterTextForXSS(theContent);
         }
         return {
           id: g.uniqueId,
@@ -1573,7 +1653,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //Checking null+undefined required here to have a default obj value
       if (!calConfigs.fieldValueMappings || typeof calConfigs.fieldValueMappings !== "object") //null is an "object"
         calConfigs.fieldValueMappings = {};
-      //When adding new props, consider  the effects of the prop *not* being provided/set at all
+      //When adding new props, consider the effects of the prop *not* being provided/set at all
 
       //Add Category props to configs (classField and className)
       //Split on the : char to determine if a field or category was selected (Field:owaField or Static:category.uniqueId)
@@ -1632,9 +1712,16 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 
     const allDayEvent = (getFieldValue("fAllDayEvent") == "1" || getFieldValue("fAllDayEvent") == true ? true : false);
     let strStartDateValue = getFieldValue(list.startDateField);
-    if (allDayEvent)
+    if (allDayEvent && strStartDateValue)
       strStartDateValue = strStartDateValue.split("Z")[0]; //Drop the zulu designation to make it handle date as local
-    const eventStartDate = this.formatDateFromSOAP(strStartDateValue);
+
+    let eventStartDate; //might be null for custom lists where the field isn't required/populated
+    if (strStartDateValue) {
+      //Check if date is valid first (calculated columns for example "datetime;#2024-03-31T22:00:00Z")
+      const splits = strStartDateValue.split(";#");
+      strStartDateValue = (splits[1] || splits[0]); //0 index is for other/"regular" fields
+      eventStartDate = this.formatDateFromSOAP(strStartDateValue);
+    }
 
     let eventEndDate; //might be null for custom lists where the field isn't required/populated
     if (list.endDateField) {
@@ -1643,6 +1730,9 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         if (allDayEvent)
           strEndDateValue = strEndDateValue.split("Z")[0]; //Drop the zulu designation to make it handle date as local
 
+        //Check if date is valid first (calculated columns for example "datetime;#2024-03-31T22:00:00Z")
+        const splits = strEndDateValue.split(";#");
+        strEndDateValue = (splits[1] || splits[0]); //0 index is for other/"regular" fields
         eventEndDate = this.formatDateFromSOAP(strEndDateValue);
         //Check for non-calendar list dates in which no time is provided...
         if (list.isCalendar == false && listConfigs.extendEndTimeAllDay && eventEndDate.getHours() == 0 && eventEndDate.getMinutes() == 0) {
@@ -1660,6 +1750,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   }
 
   private buildSPOItemObject(list:IListItem, listConfigs:IListConfigs, fieldKeys:string[], itemData:any, existingId?:number):any {
+    //Helper function
     function getFieldValue(name:string) {
       if (name == null)
         return null;
@@ -1671,6 +1762,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     }
 
     const itemDateInfo = this.getSPItemDates(list, listConfigs, itemData);
+    if (itemDateInfo.eventStartDate == null) //must have a start date
+      return {};
 
     //Get the "title" value
     let strTitle = "[No Title]"; //default value
@@ -1689,7 +1782,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       spId: getFieldValue("ID"),
       encodedAbsUrl: getFieldValue("EncodedAbsUrl"),
       sourceObj: list,
-      content: strTitle,
+      content: this.filterTextForXSS(strTitle),
       //title: elem.getAttribute("ows_Title"), //Tooltip
       start: itemDateInfo.eventStartDate,
       //end: elem.getAttribute("ows_EndDate"),
@@ -1783,7 +1876,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             fieldValue = fieldValue.replace(/<br>$/, "");
           }
           //Set prop with updated value
-          oEvent[field] = fieldValue;
+          oEvent[field] = this.filterTextForXSS(fieldValue);
         }
         else {
           //Handle Number/Currency field values like 1.00000000000000 & 10.2000000000000
@@ -1803,7 +1896,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           //   oEvent[field] = fieldSplit.join(", ");
           // }
           const fieldSplit = this.handleMultipleSOAPValues(fieldValue);
-          oEvent[field] = fieldSplit.join(", ");
+          oEvent[field] = this.filterTextForXSS(fieldSplit.join(", "))
         }
       }
     });
@@ -1811,7 +1904,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     return oEvent;
   }
 
-  private getFieldMappedValue(configsObj:any, field:string, fieldValue:string): any {
+  private getFieldMappedValue(configsObj:any, field:string, fieldValue:string, forTooltip?:boolean): any {
     //Handle any user provided mappings
     /* Example format
     {
@@ -1827,6 +1920,11 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       if (valueMappingObj && typeof valueMappingObj === "object") {
         //Get the new [mapped] value
         const newValue = valueMappingObj[fieldValue];
+        
+        //Return original value in tooltip if property specified
+        if (forTooltip && valueMappingObj._shownInTooltip == false)
+          return fieldValue;
+
         return (newValue || fieldValue);
       }
     }
@@ -1840,6 +1938,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     if (calEvent.subject != null && calEvent.subject.trim() != "") {
       strTitle = calEvent.subject;
     }
+    strTitle = this.getFieldMappedValue(calConfigs, "subject", strTitle);
     
     //Process "non-dates" ("0001-01-01T00:00:00Z" is returned for private events)
     if (calEvent.createdDateTime == "0001-01-01T00:00:00Z") { //had: calEvent.sensitivity == "private" && 
@@ -1855,7 +1954,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //encodedAbsUrl: for SPO,
       calEventWebLink: calEvent.webLink,
       sourceObj: calendar,
-      content: strTitle,
+      content: this.filterTextForXSS(strTitle),
       //title: elem.getAttribute("ows_Title"), //Tooltip
       start: new Date(calEvent.start.dateTime + (calEvent.isAllDay ? "" : "Z")), //treat as local time for all day events
       end: new Date(calEvent.end.dateTime + (calEvent.isAllDay ? "" : "Z")),
@@ -1911,24 +2010,32 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //let wasMapped = true;
       //Map certain field names to help match to existing SP calendar fields
       switch (field) {
+        //case "location":
         case "Location":
           fieldValue = calEvent.location.displayName;
-          oEvent["Location"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          fieldValue = this.getFieldMappedValue(calConfigs, "location", fieldValue, true);
+          oEvent["Location"] = this.filterTextForXSS(fieldValue);
           break;
 
+        //case "categories":
         case "Category":
           fieldValue = calEvent.categories.join(", ");
-          oEvent["Category"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          fieldValue = this.getFieldMappedValue(calConfigs, "categories", fieldValue, true);
+          oEvent["Category"] = this.filterTextForXSS(fieldValue);
           break;
 
+        //case "body":
         case "Description":
           fieldValue = (calEvent.body && calEvent.body.content || "");
-          oEvent["Description"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          fieldValue = this.getFieldMappedValue(calConfigs, "body", fieldValue, true);
+          oEvent["Description"] = this.filterTextForXSS(fieldValue);
           break;
 
+        //case "organizer":
         case "Author":
           fieldValue = (calEvent.organizer && calEvent.organizer.emailAddress.name || "");
-          oEvent["Author"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          fieldValue = this.getFieldMappedValue(calConfigs, "organizer", fieldValue, true);
+          oEvent["Author"] = this.filterTextForXSS(fieldValue);
           break;
 
         // case "Editor":
@@ -1936,32 +2043,34 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         //   oEvent["Editor"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
         //   break;
 
+        //case "createdDateTime":
         case "Created":
           fieldValue = calEvent.createdDateTime;
-          oEvent["Created"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          fieldValue = this.getFieldMappedValue(calConfigs, "createdDateTime", fieldValue, true);
+          oEvent["Created"] = this.filterTextForXSS(fieldValue);
           break;
         
+        //case "lastModifiedDateTime":
         case "Modified":
           fieldValue = calEvent.lastModifiedDateTime;
-          oEvent["Modified"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+          fieldValue = this.getFieldMappedValue(calConfigs, "lastModifiedDateTime", fieldValue, true);
+          oEvent["Modified"] = this.filterTextForXSS(fieldValue);
           break;
 
         case "charmIcon":
           fieldValue = (calEvent.singleValueExtendedProperties && calEvent.singleValueExtendedProperties[0] &&
                           calEvent.singleValueExtendedProperties[0].value || "");
           if (fieldValue == "None")
-            fieldValue = "";
-          oEvent["charmIcon"] = this.getFieldMappedValue(calConfigs, field, fieldValue);
+            fieldValue = ""; //set to blank instead
+
+          fieldValue = this.getFieldMappedValue(calConfigs, "charmIcon", fieldValue, true);
+          oEvent["charmIcon"] = this.filterTextForXSS(fieldValue);
           break;
 
         default:
-          //wasMapped = false;
-          oEvent[field] = (this.getFieldMappedValue(calConfigs, field, fieldValue) || "");
+          fieldValue = (this.getFieldMappedValue(calConfigs, field, fieldValue, true) || "");
+          oEvent[field] = this.filterTextForXSS(fieldValue);
       }
-
-      //If value wasn't set in above switch, set it now using the default field key
-      //if (fieldValue && wasMapped == false)
-      //  oEvent[field] = (fieldValue || "");
     });
 
     return oEvent;
@@ -2207,6 +2316,9 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           const itemDateInfo = this.getSPItemDates(list, listConfigs, elem);
           //const startFieldName = "ows_" + list.startDateField;
           //const endFieldName = (list.endDateField ? "ows_" + list.endDateField : null);
+          if (itemDateInfo.eventStartDate == null) //Cannot add events with no start date
+              return; //skip this one
+
           lastStartDate = itemDateInfo.eventStartDate; //saved for later
           
           //CAML returns *recurring* events for a whole year prior to and after today regardless of any EventDate/EndDate filters
@@ -2215,9 +2327,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             //numOfValidItems++;
             
             const oEvent = this.buildSPOItemObject(list, listConfigs, fieldKeys, elem);
-            if (oEvent.start == null) //just as a precaution to prevent script error adding object to DataSet
-              return;
-
+            
             //Add group (row/swimlane)
             let multipleValuesFound = false;
             if (listConfigs.groupId)
@@ -2437,7 +2547,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
                   groupFieldValue = (calEvent.singleValueExtendedProperties && calEvent.singleValueExtendedProperties[0] &&
                     calEvent.singleValueExtendedProperties[0].value || "");
                   if (groupFieldValue == "None")
-                  groupFieldValue = "";
+                    groupFieldValue = ""; //overwrite value
                   break;
 
                 default:

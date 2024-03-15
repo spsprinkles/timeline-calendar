@@ -108,8 +108,16 @@ export default class MonacoPanelEditor extends React.Component<IMonacoPanelEdito
         this.setState({isOpen: false});
 
         //Should the value be saved?
-        if (doSave)
+        if (doSave) {
+          if (this.props.language == 'css' || this.props.language == 'html') {
+            //Extra protection for IE
+            this.tempValue = this.tempValue.replace(/javascript:/g, '');
+            this.tempValue = this.tempValue.replace(/&#106;&#97;&#118;&#97;&#115;&#99;&#114;&#105;&#112;&#116;&#58;/g, '');
+            this.tempValue = this.tempValue.replace(/&#0000106&#0000097&#0000118&#0000097&#0000115&#0000099&#0000114&#0000105&#0000112&#0000116&#0000058/g, '');
+            this.tempValue = this.tempValue.replace(/&#x6A&#x61&#x76&#x61&#x73&#x63&#x72&#x69&#x70&#x74&#x3A/g, '');
+          }
           this.props.onValueChanged(this.tempValue);
+        }
     }
 
     //<PrimaryButton onClick={(e) => this.closePanel(e, true)} styles={this.buttonStyles}>Save</PrimaryButton>
