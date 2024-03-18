@@ -2059,7 +2059,7 @@ ${this.instanceId}
                       placeholder: " ", //need a space because blank just shows the title
                       type: CustomCollectionFieldType.string,
                       required: false,
-                      deferredValidationTime: 1000,
+                      //deferredValidationTime: 1000, //was using this but then quickly-typed-and-then-saved changes were not actually saved
                       //Oddly named: This is really the "perform field validation" function
                       onGetErrorMessage: (value: string, index: number, item: ICalendarItem) => {
                         //NOTE: "this" is just the field object
