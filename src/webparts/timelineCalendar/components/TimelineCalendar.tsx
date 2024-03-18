@@ -1579,18 +1579,18 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       catch (e) {}
     }
 
-    //Ensure properties have valid types (with default values as needed)
-    if (configs.camlFilter && typeof configs.camlFilter !== "string")
+    //Ensure properties have valid types (and set default values if needed)
+    if (configs.camlFilter == null || typeof configs.camlFilter !== "string")
       configs.camlFilter = null;
-    if (configs.dateInUtc && typeof configs.dateInUtc !== "boolean")
+    if (configs.dateInUtc == null || typeof configs.dateInUtc !== "boolean")
       configs.dateInUtc = true;
-    if (configs.visible && typeof configs.visible !== "boolean")
+    if (configs.visible == null || typeof configs.visible !== "boolean")
       configs.visible = true;
-    if (configs.multipleCategories && typeof configs.multipleCategories !== "string")
+    if (configs.multipleCategories == null || typeof configs.multipleCategories !== "string")
       configs.multipleCategories = "useFirst";
-    if (configs.extendEndTimeAllDay && typeof configs.extendEndTimeAllDay !== "boolean")
+    if (configs.extendEndTimeAllDay == null || typeof configs.extendEndTimeAllDay !== "boolean")
       configs.extendEndTimeAllDay = true;
-    //When adding new props, consider  the effects of the prop *not* being provided/set at all
+    //When adding new props, consider the effects of the prop *not* being provided/set at all
 
     //Add Category props to configs (classField and className)
     //Split on the : char to determine if a field or category was selected (Field:fieldInternalName or Static:category.uniqueId)
@@ -1645,13 +1645,12 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         catch (e) {}
       }
 
-      //Ensure properties have valid types (with default values as needed)
-      if (calConfigs.visible && typeof calConfigs.visible !== "boolean")
+      //Ensure properties have valid types (and set default values if needed)
+      if (calConfigs.visible == null || typeof calConfigs.visible !== "boolean")
         calConfigs.visible = true;
-      if (calConfigs.multipleCategories && typeof calConfigs.multipleCategories !== "string")
+      if (calConfigs.multipleCategories == null || typeof calConfigs.multipleCategories !== "string")
         calConfigs.multipleCategories = "useFirst";
-      //Checking null+undefined required here to have a default obj value
-      if (!calConfigs.fieldValueMappings || typeof calConfigs.fieldValueMappings !== "object") //null is an "object"
+      if (calConfigs.fieldValueMappings == null || typeof calConfigs.fieldValueMappings !== "object") //null is an "object"
         calConfigs.fieldValueMappings = {};
       //When adding new props, consider the effects of the prop *not* being provided/set at all
 
@@ -1734,7 +1733,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         const splits = strEndDateValue.split(";#");
         strEndDateValue = (splits[1] || splits[0]); //0 index is for other/"regular" fields
         eventEndDate = this.formatDateFromSOAP(strEndDateValue);
-        //Check for non-calendar list dates in which no time is provided...
+        //Check for non-calendar list dates in which no time is provided...(toLocaleTimeString() == "12:00:00 AM")
         if (list.isCalendar == false && listConfigs.extendEndTimeAllDay && eventEndDate.getHours() == 0 && eventEndDate.getMinutes() == 0) {
           //...change the time to the end of day
           eventEndDate.setDate(eventEndDate.getDate() + 1);
@@ -1946,6 +1945,19 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       calEvent.lastModifiedDateTime = null;
     }
 
+    /*{ //Outlook dates are returned in UTC but without a trailing "Z" character
+        dateTime: "2024-03-22T00:00:00.0000000" or "2024-03-18T12:30:00.0000000"
+        timeZone: "UTC"
+      }*/
+    //All day event *end* dates show as the *next* day with 00:00:00 time
+    let eventEndDate;
+    if (calEvent.isAllDay) { //Change the end to be the end of the correct day
+      eventEndDate = new Date(calEvent.end.dateTime);
+      eventEndDate.setMinutes(eventEndDate.getMinutes() -1); //shows as 23:59:00
+    }
+    else
+      eventEndDate = new Date(calEvent.end.dateTime + "Z");
+
     //Build the event obj
     let oEvent = {
       id: IdSvc.getNext(),
@@ -1956,10 +1968,9 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       sourceObj: calendar,
       content: this.filterTextForXSS(strTitle),
       //title: elem.getAttribute("ows_Title"), //Tooltip
-      start: new Date(calEvent.start.dateTime + (calEvent.isAllDay ? "" : "Z")), //treat as local time for all day events
-      end: new Date(calEvent.end.dateTime + (calEvent.isAllDay ? "" : "Z")),
+      start: new Date(calEvent.start.dateTime + (calEvent.isAllDay ? "" : "Z")), //All day events treated as local time
+      end: eventEndDate,
       type: "range", //Changed later as needed
-          //  location: calEvent.location.displayName,
       //className: //assigned next
       //group: list.groupId //assigned next
     } as any;
