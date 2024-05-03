@@ -27,6 +27,7 @@ Refer to the [releases page](https://github.com/spsprinkles/timeline-calendar/re
 
 | Version | Date              | Comments        |
 | ------- | ----------------- | --------------- |
+| 0.6.2   | May 3, 2024       | Enabled advanced code editor for DoD365-Sec |
 | 0.6.1   | March 18, 2024    | Several enhancements & bug fixes |
 | 0.6.0   | January 21, 2024  | New features (including Outlook calendar support) & bug fixes |
 | 0.5.3   | November 27, 2023 | Several bug fixes |

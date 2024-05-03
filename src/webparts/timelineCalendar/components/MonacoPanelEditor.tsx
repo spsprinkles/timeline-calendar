@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { Panel, PanelType } from 'office-ui-fabric-react/lib/Panel';
 import { DefaultButton, PrimaryButton } from 'office-ui-fabric-react/lib/Button';
-import { MonacoEditor } from "@pnp/spfx-controls-react/lib/MonacoEditor";
+//import { MonacoEditor } from "@pnp/spfx-controls-react/lib/MonacoEditor";
+import { MonacoEditor } from "./MonacoEditor";
 
 interface IMonacoPanelEditorProps {
   key: string;
@@ -104,12 +105,12 @@ export default class MonacoPanelEditor extends React.Component<IMonacoPanelEdito
     // }
 
     //Checks if content should be saved (only when Save button is clicked)
-    private closePanel = (doSave: boolean) => {
+    private closePanel = (doSave: boolean):void => {
         this.setState({isOpen: false});
 
         //Should the value be saved?
         if (doSave) {
-          if (this.props.language == 'css' || this.props.language == 'html') {
+          if (this.props.language === 'css' || this.props.language === 'html') {
             //Extra protection for IE
             this.tempValue = this.tempValue.replace(/javascript:/g, '');
             this.tempValue = this.tempValue.replace(/&#106;&#97;&#118;&#97;&#115;&#99;&#114;&#105;&#112;&#116;&#58;/g, '');
