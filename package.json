@@ -1,6 +1,6 @@
 {
   "name": "Timeline Calendar",
-  "version": "0.6.1.1",
+  "version": "0.6.1.3",
   "private": true,
   "engines": {
     "node": ">=16.13.0 <17.0.0"

@@ -14,8 +14,8 @@ import { ICalendarItem, IPersonaProps, IMemberOfResult, ICategoryItem, IGroupIte
 import { PropertyFieldCollectionData, CustomCollectionFieldType, ICustomDropdownOption, ICustomCollectionField } from "@pnp/spfx-property-controls/lib/PropertyFieldCollectionData";
 import { PropertyFieldNumber } from '@pnp/spfx-property-controls/lib/PropertyFieldNumber';
 //import { PropertyFieldCodeEditor, PropertyFieldCodeEditorLanguages } from '@pnp/spfx-property-controls/lib/PropertyFieldCodeEditor';
-import { PropertyFieldMonacoEditor } from '@pnp/spfx-property-controls/lib/PropertyFieldMonacoEditor';
-//import { MonacoEditor?? } from "@pnp/spfx-controls-react/lib/MonacoEditor??";
+//import { PropertyFieldMonacoEditor } from '@pnp/spfx-property-controls/lib/PropertyFieldMonacoEditor';
+import { PropertyFieldMonacoEditor } from './components/PropertyFieldMonacoEditor';
 import { PropertyPaneWebPartInformation } from '@pnp/spfx-property-controls/lib/PropertyPaneWebPartInformation';
 //import { PropertyPaneMarkdownContent } from '@pnp/spfx-property-controls/lib/PropertyPaneMarkdownContent';
 import { PropertyFieldMessage } from '@pnp/spfx-property-controls/lib/PropertyFieldMessage';
@@ -29,6 +29,7 @@ import { Guid } from '@microsoft/sp-core-library';
 import { GraphError } from '@microsoft/microsoft-graph-client'; //ResponseType
 import * as MicrosoftGraph from '@microsoft/microsoft-graph-types';
 import DirectoryPicker from './components/DirectoryPicker';
+import AcquireContext from './components/AcquireContext';
 
 //These are the persisted web part properties
 export interface ITimelineCalendarWebPartProps {
@@ -69,14 +70,14 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
   };
   private _graphClient: Promise<MSGraphClientV3> = null;
   private _graphScopes: string[] = [];
-  private _messageListener = (event:MessageEvent) => {
+  private _messageListener = (event:MessageEvent):void => {
     //Look for only "local" events (ignoring OWA webshell messages: https://webshell.dodsuite.office365.us)
     if (event.origin === window.location.origin) {
       //event.data == 
         //Property pane will open (also when *updating props* and when switching to other web parts, but doesn't cause following "toggled" to fire)
         //Property pane toggled (when opened and also when closed, also when page is saved)
       //event.timeStamp: 219218.10000002384 (will be the same for duplicated messages)
-      if (event.data == "Property pane toggled")
+      if (event.data === "Property pane toggled")
         //Reset the cache
         this.dataCache = {
           webs: {},
@@ -95,12 +96,14 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
   //Also fired while already in edit mode and new web part is added (also mode #2)
   protected onInit(): Promise<void> {
     //console.log("onInit, displayMode:" + this.displayMode.toString());
-    if (this.displayMode == DisplayMode.Edit)
+    if (this.displayMode === DisplayMode.Edit)
       window.addEventListener("message", this._messageListener, false);
 
     //Opt-out of PnP telemetry
     const telemetry = PnPTelemetry.getInstance();
     telemetry.optOut();
+
+    AcquireContext.setContext(this.context);
 
     //Get reference
     this._graphClient = this.context.msGraphClientFactory.getClient('3');
@@ -112,7 +115,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     }*/
 
     //Get user's groups in case Outlook Calendars collection/pane is opened
-    if (this.displayMode == DisplayMode.Edit)
+    if (this.displayMode === DisplayMode.Edit && window.location.hash !== "#noMemberOfList") //for temp testing
       this.getUserMemberOf();
 
     //If there's no existing data, add some default categories and groups to give the user a visual starting point/example
@@ -176,7 +179,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
       ];
 
     //Set default value for tooltip editor
-    if (this.properties.tooltipEditor == null || this.properties.tooltipEditor == "")
+    if (this.properties.tooltipEditor == null || this.properties.tooltipEditor === "")
       this.properties.tooltipEditor = this.getDefaultTooltip();
 
     return this._getEnvironmentMessage().then(message => {
@@ -229,7 +232,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
   }
   
   private getUserMemberOf():void {
-    if (this.displayMode == DisplayMode.Edit) {
+    if (this.displayMode === DisplayMode.Edit) {
       this._graphClient.then((client:MSGraphClientV3): void => {
         client.api("/me/memberOf").select("id,displayName,mail,visibility")
         //Need to exclude security groups
@@ -274,6 +277,9 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
             }
           }
         });
+      })
+      .catch (error => {
+        console.error(error);
       });
     }
   }
@@ -352,7 +358,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     ReactDom.unmountComponentAtNode(this.domElement);
 
     //console.log("onDispose, displayMode:" + this.displayMode.toString());
-    if (this.displayMode == DisplayMode.Edit)
+    if (this.displayMode === DisplayMode.Edit)
       //Remove event listener
       window.removeEventListener("message", this._messageListener, false);
 
@@ -398,7 +404,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     className = (className as string); //just for TypeScript compiling
 
     //Calculated fields add extra content, remove it
-    if (className.indexOf(";#") != -1) { //ex: string;#CalculatedValueHere
+    if (className.indexOf(";#") !== -1) { //ex: string;#CalculatedValueHere
       const index = className.indexOf(";#");
       className = className.substring(index+2);
     }
@@ -407,7 +413,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     className = className.replace(/\W/g, "");
     
     //Check if class starts with a number, which isn't valid
-    if (isNaN(Number(className.charAt(0))) == false)
+    if (isNaN(Number(className.charAt(0))) === false)
       //className = TC.settings.numCssClassPrepend + className;
       className = "Prepend" + className;
     return className;
@@ -433,17 +439,17 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
   private getGraphScopes(returnError?:boolean): string[] {
     //Look for and save Graph scope information
     for (const key in sessionStorage) {
-      //@ts-ignore (for startsWith)
-      if (key && typeof key == "string" && key.startsWith('{"authority":')) {
+      //@ts-ignore @typescript-eslint/TS2550 (for startsWith)
+      if (key && typeof key === "string" && key.startsWith('{"authority":')) {
         try {
           const keyObj = JSON.parse(key);
           //Find the correct Graph results entry
           //TODO: Look for the SPO client app specifically (decode the JWT)
-          if (keyObj.scopes && keyObj.scopes.indexOf('profile openid') != -1) {
+          if (keyObj.scopes && keyObj.scopes.indexOf('profile openid') !== -1) {
             const scopes = keyObj.scopes.split(" ");
             //Change "https://[dod-]graph.microsoft.[com/us]/User.Read" value to instead just get "User.Read" portion
-            this._graphScopes = scopes.map((value:string, i:Number) => {
-              if (value.indexOf('graph.microsoft.') != -1)
+            this._graphScopes = scopes.map((value:string, i:number) => {
+              if (value.indexOf('graph.microsoft.') !== -1)
                 return value.split("/")[3];
               else
                 return value;
@@ -462,12 +468,14 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
             });
           }
         }
-        catch (e) {}
+        catch (e) {
+          //Nothing needed
+        }
       }
     }
 
     //If returnError specified, return the error details if there were no scopes found
-    if ((this._graphScopes == null || this._graphScopes.length == 0) && returnError 
+    if ((this._graphScopes == null || this._graphScopes.length === 0) && returnError 
           && sessionStorage["msal.error.description"])
       this._graphScopes = [sessionStorage["msal.error.description"]];
 
@@ -786,7 +794,7 @@ ${this.instanceId}
                         //TODO for library: https://usaf.dps.mil/teams/UA-App-VCP/csktest/ODSTest/Forms/AllItems.aspx
 
                         //Look if .aspx is still at end of the URL to warn user
-                        //@ts-ignore (we know endsWith is available)
+                        //@ts-ignore @typescript-eslint/TS2550 (for endsWith)
                         if (value.toLowerCase().endsWith(".aspx"))
                           return 'URL must be to the site only and not to a list or page';
                         
@@ -904,12 +912,12 @@ ${this.instanceId}
                                       //TODO: Instead call .text() and then try/catch with JSON.parse?
                                       response.json().then((data:any) => {
                                         let promiseData:IDropdownOption[] = [];
-                                        let calendars:IDropdownOption[] = [];
-                                        let lists:IDropdownOption[] = [];
-                                        let others:IDropdownOption[] = [];
+                                        const calendars:IDropdownOption[] = [];
+                                        const lists:IDropdownOption[] = [];
+                                        const others:IDropdownOption[] = [];
                                         data.value.forEach((list:any) => {
                                           //Check for "legacy" calendars
-                                          if (list.BaseTemplate == 106)
+                                          if (list.BaseTemplate === 106)
                                             calendars.push({
                                               key: list.Id,
                                               text: list.Title,
@@ -1134,13 +1142,13 @@ ${this.instanceId}
 
                                             //Ignore known lists
                                             const foundList = ignoredLists.filter(ignList => {
-                                              return (ignList.BaseTemplate == list.BaseTemplate && list.RootFolder.ServerRelativeUrl.endsWith(ignList.WebRelativeUrl))
+                                              return (ignList.BaseTemplate === list.BaseTemplate && list.RootFolder.ServerRelativeUrl.endsWith(ignList.WebRelativeUrl))
                                             })
                                             if (foundList.length > 0)
                                               return; //skip this list                                     
 
                                             //Look for lists
-                                            if (list.BaseTemplate == 100 || list.BaseTemplate == 104 || list.BaseTemplate == 107 || list.BaseTemplate == 120 || list.BaseTemplate == 150 || list.BaseTemplate == 171 || list.BaseTemplate == 1100)
+                                            if (list.BaseTemplate === 100 || list.BaseTemplate === 104 || list.BaseTemplate === 107 || list.BaseTemplate === 120 || list.BaseTemplate === 150 || list.BaseTemplate === 171 || list.BaseTemplate === 1100)
                                               lists.push({
                                                 key: list.Id,
                                                 text: list.Title,
@@ -1268,7 +1276,7 @@ ${this.instanceId}
                                     if (response.ok) {
                                       response.json().then((data:any) => {
                                         //Add a blank option to *not* select a View
-                                        let promiseData:IDropdownOption[] = [];
+                                        const promiseData:IDropdownOption[] = [];
                                         promiseData.push({
                                           key: "", //blank
                                           text: ""
@@ -1399,7 +1407,7 @@ ${this.instanceId}
                               //Build dropdown return promise
                               const returnPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
                                 fieldPromise.then((fields:[]) => {
-                                  let promiseData:IDropdownOption[] = [];
+                                  const promiseData:IDropdownOption[] = [];
                                   //Add a blank option
                                   // promiseData.push({
                                   //   key: "", //blank
@@ -1408,9 +1416,9 @@ ${this.instanceId}
                                   //Add results to dropdown
                                   fields.forEach((field:any) => {
                                     //Only add applicable fields for the "Event Title"
-                                    if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
-                                        (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "Lookup" || 
-                                           field.TypeAsString == "User")))
+                                    if (field.TypeAsString === "Calculated" || (field.ReadOnlyField === false && //Calculated is first because it's a ReadOnlyField
+                                        (field.TypeAsString === "Text" || field.TypeAsString === "Choice" || field.TypeAsString === "Lookup" || 
+                                           field.TypeAsString === "User")))
                                       promiseData.push({
                                         key: field.InternalName,
                                         text: field.Title,
@@ -1456,11 +1464,11 @@ ${this.instanceId}
                                 //Build dropdown return promise
                                 const returnPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
                                   fieldPromise.then((fields:[]) => {
-                                    let promiseData:IDropdownOption[] = [];
+                                    const promiseData:IDropdownOption[] = [];
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add date fields
-                                      if (field.TypeAsString == "DateTime" || (field.TypeAsString == "Calculated" && field.OutputType == 4))
+                                      if (field.TypeAsString === "DateTime" || (field.TypeAsString === "Calculated" && field.OutputType === 4))
                                         promiseData.push({
                                           key: field.InternalName,
                                           text: field.Title,
@@ -1506,7 +1514,7 @@ ${this.instanceId}
                                 //Build dropdown return promise
                                 const returnPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
                                   fieldPromise.then((fields:[]) => {
-                                    let promiseData:IDropdownOption[] = [];
+                                    const promiseData:IDropdownOption[] = [];
                                     //Add a blank option
                                     promiseData.push({
                                       key: "", //blank
@@ -1515,7 +1523,7 @@ ${this.instanceId}
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add date fields
-                                      if (field.TypeAsString == "DateTime" || (field.TypeAsString == "Calculated" && field.OutputType == 4))
+                                      if (field.TypeAsString === "DateTime" || (field.TypeAsString === "Calculated" && field.OutputType === 4))
                                         promiseData.push({
                                           key: field.InternalName,
                                           text: field.Title,
@@ -1568,7 +1576,7 @@ ${this.instanceId}
                                 const returnPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
                                   fieldPromise.then((fields:[]) => {
                                     //Add a blank option
-                                    let promiseData:IDropdownOption[] = [];
+                                    const promiseData:IDropdownOption[] = [];
                                     promiseData.push({
                                       key: "", //blank
                                       text: ""
@@ -1585,12 +1593,12 @@ ${this.instanceId}
                                       // if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
                                       //      (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "Lookup" || 
                                       //         field.TypeAsString == "User")))
-                                      if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
-                                        (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "MultiChoice" || 
-                                          field.TypeAsString == "Lookup" || field.TypeAsString == "LookupMulti" ||
+                                      if (field.TypeAsString === "Calculated" || (field.ReadOnlyField === false && //Calculated is first because it's a ReadOnlyField
+                                        (field.TypeAsString === "Text" || field.TypeAsString === "Choice" || field.TypeAsString === "MultiChoice" || 
+                                          field.TypeAsString === "Lookup" || field.TypeAsString === "LookupMulti" ||
                                           //OutcomeChoice is "Task Outcome in the classic UI"
-                                          field.TypeAsString == "OutcomeChoice" || field.TypeAsString == "User" || field.TypeAsString == "UserMulti" ||
-                                          field.TypeAsString == "TaxonomyFieldType" || field.TypeAsString == "TaxonomyFieldTypeMulti")))
+                                          field.TypeAsString === "OutcomeChoice" || field.TypeAsString === "User" || field.TypeAsString === "UserMulti" ||
+                                          field.TypeAsString === "TaxonomyFieldType" || field.TypeAsString === "TaxonomyFieldTypeMulti")))
                                         promiseData.push({
                                           key: "Field:" + field.InternalName,
                                           text: field.Title,
@@ -1658,7 +1666,7 @@ ${this.instanceId}
                                 const returnPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
                                   fieldPromise.then((fields:[]) => {
                                     //Add a blank option
-                                    let promiseData:IDropdownOption[] = [];
+                                    const promiseData:IDropdownOption[] = [];
                                     promiseData.push({
                                       key: "", //blank
                                       text: ""
@@ -1672,12 +1680,12 @@ ${this.instanceId}
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add applicable fields
-                                      if (field.TypeAsString == "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
-                                           (field.TypeAsString == "Text" || field.TypeAsString == "Choice" || field.TypeAsString == "MultiChoice" || 
-                                            field.TypeAsString == "Lookup" || field.TypeAsString == "LookupMulti" ||
+                                      if (field.TypeAsString === "Calculated" || (field.ReadOnlyField == false && //Calculated is first because it's a ReadOnlyField
+                                           (field.TypeAsString === "Text" || field.TypeAsString === "Choice" || field.TypeAsString === "MultiChoice" || 
+                                            field.TypeAsString === "Lookup" || field.TypeAsString === "LookupMulti" ||
                                             //OutcomeChoice is "Task Outcome in the classic UI"
-                                            field.TypeAsString == "OutcomeChoice" || field.TypeAsString == "User" || field.TypeAsString == "UserMulti" ||
-                                            field.TypeAsString == "TaxonomyFieldType" || field.TypeAsString == "TaxonomyFieldTypeMulti")))
+                                            field.TypeAsString === "OutcomeChoice" || field.TypeAsString === "User" || field.TypeAsString === "UserMulti" ||
+                                            field.TypeAsString === "TaxonomyFieldType" || field.TypeAsString === "TaxonomyFieldTypeMulti")))
                                         promiseData.push({
                                           key: "Field:" + field.InternalName,
                                           text: field.Title,
@@ -1838,7 +1846,7 @@ ${this.instanceId}
                               }
                               else {
                                 //Create a "trimmer" object
-                                let item = [{
+                                const item = [{
                                   key: items[0].key,
                                   text: items[0].text,
                                   mail: items[0].mail,
@@ -1879,21 +1887,24 @@ ${this.instanceId}
                                 if (persona.personaType == "user")
                                   this._graphClient.then((client:MSGraphClientV3): void => {
                                     const now = new Date();
-                                    let later = new Date();
+                                    const later = new Date();
                                     later.setDate(later.getDate() + 1);
                                     //Just try to get any event to see if access denied is returned
                                     client.api("/users/" + persona.key + "/calendars/" + option.key + "/calendarView")
                                     .query(`startDateTime=${now.toISOString()}&endDateTime=${later.toISOString()}`)
                                     .select("id,subject").top(1)
                                     .get((error:GraphError, response:any, rawResponse?:any) => {
-                                      if (error && error.code == "ErrorAccessDenied") {
+                                      if (error && error.code === "ErrorAccessDenied") {
                                         onCustomFieldValidation(field.id, 'You need at least the "view all details" permission to this calendar');
                                       }
                                     })
                                     .catch(reason => { //reason is undefined
                                       //Just catch to prevent "Uncaught (in promise)" console error
                                     })
-                                  });
+                                  })
+                                  .catch (error => {
+                                    console.error(error);
+                                  });;
                               }
                             },
                             loadOptions: () => {
@@ -1912,10 +1923,10 @@ ${this.instanceId}
                               }
 
                               //For groups just return a "default" calendar (since there cannot be other "created" calendars like with users)
-                              if (persona.personaType == "group") {
+                              if (persona.personaType === "group") {
                                 //Just "return" this simple promise
-                                return new Promise<IDropdownOption[]>((resolve, reject) => {
-                                  let promiseData:IDropdownOption[] = [];
+                                return new Promise<IDropdownOption[]>((resolve) => { //resolve, reject
+                                  const promiseData:IDropdownOption[] = [];
                                   promiseData.push({
                                     key: "calendar:default",
                                     text: "Calendar"
@@ -1943,7 +1954,7 @@ ${this.instanceId}
                                       self.dataCache.calendars[personaId] = null;
                                       
                                       //Provide a clearer error message in case of no permissions to calendar
-                                      if (error.message == "The specified object was not found in the store.") {
+                                      if (error.message === "The specified object was not found in the store.") {
                                         //Store error for use inside catch()
                                         errorMsg = "No permissions to load calendars for selected user";
                                         reject("No permissions to load calendars for selected user");
@@ -1956,7 +1967,7 @@ ${this.instanceId}
                                       }
                                     }
                                     else {
-                                      let promiseData:IDropdownOption[] = [];
+                                      const promiseData:IDropdownOption[] = [];
                                       // promiseData.push({
                                       //   key: "", //blank
                                       //   text: ""
@@ -1969,7 +1980,7 @@ ${this.instanceId}
                                           return;
 
                                         //Ignore these known calendars also in case the person selects themself
-                                        if (calendar.name != "United States holidays" && calendar.name != "Birthdays")
+                                        if (calendar.name !== "United States holidays" && calendar.name !== "Birthdays")
                                           promiseData.push({
                                             key: "calendar:" + calendar.id,
                                             text: calendar.name
@@ -2054,7 +2065,7 @@ ${this.instanceId}
                           return false;
                       },*/
                       disable: (item:ICalendarItem):boolean => {
-                        return (item.persona == null || item.persona.length == 0 || item.resource == null ? true : false);
+                        return (item.persona == null || item.persona.length === 0 || item.resource == null ? true : false);
                       },
                       placeholder: " ", //need a space because blank just shows the title
                       type: CustomCollectionFieldType.string,
@@ -2066,7 +2077,7 @@ ${this.instanceId}
                         //Fired after deferredValidationTime
 
                         //Handle blank and cleared-out values
-                        if (value == null || value.trim() == '')
+                        if (value == null || value.trim() === '')
                           return ''; //no validation error; '' lets default checks happen
 
                         //Help remove "$filter=" (and variants without $) if user entered it
@@ -2085,14 +2096,14 @@ ${this.instanceId}
                           this._graphClient.then((client:MSGraphClientV3): void => {
                             //Build API URL based on user or group calendar
                             let apiURL = "";
-                            let resourceId = item.resource.split(":")[1]; //format "calendar:id"
+                            const resourceId = item.resource.split(":")[1]; //format "calendar:id"
                             if (item.persona[0].personaType == "user")
                               apiURL = "/users/" + item.persona[0].mail + "/calendars/" + resourceId + "/calendarView";
                             else //assumed to be a group
                               apiURL = "/groups/" + item.persona[0].key + "/calendarView";
 
                             const now = new Date();
-                            let later = new Date();
+                            const later = new Date();
                             later.setDate(later.getDate() + 1);
                             
                             //Get sample calender view events just to test the input query
@@ -2123,14 +2134,14 @@ ${this.instanceId}
                       id: "category",
                       title: "Category",
                       disable: (item:ICalendarItem):boolean => {
-                        return (item.persona == null || item.persona.length == 0 ? true : false);
+                        return (item.persona == null || item.persona.length === 0 ? true : false);
                       },
                       placeholder: " ", //need a space because blank just shows the title
                       type: CustomCollectionFieldType.dropdown,
                       required: false,
                       //NOTE: Only fired when *initialy* rendered, not after other fields are changed
                       options: (fieldId: string, item: ICalendarItem) => {
-                        let options: ICustomDropdownOption[] = [
+                        const options: ICustomDropdownOption[] = [
                           //Add blank entry
                           {key: "", text: ""},
                           //Add fields header
@@ -2187,7 +2198,7 @@ ${this.instanceId}
                       required: false,
                       //NOTE: Only fired when *initialy* rendered, not after other fields are changed
                       options: (fieldId: string, item: IListItem) => {
-                        let options: ICustomDropdownOption[] = [
+                        const options: ICustomDropdownOption[] = [
                           //Add blank entry
                           {key: "", text: ""},
                           //Add fields header
@@ -2212,7 +2223,7 @@ ${this.instanceId}
                         //Add rows/swimlanes to dropdown
                         if (this.properties.groups && this.properties.groups.length > 0)
                           this.properties.groups.forEach((group: IGroupItem, index) => {
-                            if (index == 0 && item.group == null) { //When null this means it's a new row, so default select the first group so items will render somewhere
+                            if (index === 0 && item.group == null) { //When null this means it's a new row, so default select the first group so items will render somewhere
                               options.push({
                                 //key:group.uniqueId,
                                 key: "Static:" + group.uniqueId, 
@@ -2244,13 +2255,13 @@ ${this.instanceId}
                       type: CustomCollectionFieldType.custom,
                       onCustomRender: (field, value, onUpdate, item:ICalendarItem, itemId, onCustomFieldValidation) => {  
                         //Provide a default value to show in the editor
-                        if (value == null || value == "")
+                        if (value == null || value === "")
                           value = "{\r\n  \"visible\": true\r\n}";
 
                         return (
                           React.createElement(MonacoPanelEditor, {
                             key: itemId,
-                            disabled: (item.persona == null || item.persona.length == 0 ? true : false),
+                            disabled: (item.persona == null || item.persona.length === 0 ? true : false),
                             buttonText: "Advanced",
                             headerText: 'Advanced JSON attribute editor for Outlook Calendar configuration',
                             value: value,

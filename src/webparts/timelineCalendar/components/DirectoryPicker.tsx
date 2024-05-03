@@ -121,8 +121,10 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                 .orderby("displayName") //ascending is default
                 //.count(true)
                 .get((error:GraphError, response:any, rawResponse?:any) => {
-                  if (error)
+                  if (error) {
+                    console.error(error);
                     resolve(error.message);
+                  }
                   else {
                     const users:MicrosoftGraph.User[] = response.value;
                     const personas:IPersonaProps[] = users.map((user:MicrosoftGraph.User, index:number) => {
@@ -142,7 +144,12 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                     });
                     resolve(personas);
                   }
+                }).catch(error => { //Value is always undefined (error details are in above .get func)
+                  //Just catch to prevent "Uncaught (in promise)" console error
                 });
+              }).catch(error => {
+                console.error("Error with graphClient.then ->");
+                console.error(error);
               });
             });
 
@@ -159,8 +166,10 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                 .header('ConsistencyLevel', 'eventual')
                 .orderby("displayName") //ascending is default
                 .get((error:GraphError, response:any, rawResponse?:any) => {
-                  if (error)
+                  if (error) {
+                    console.error(error);
                     resolve(error.message);
+                  }
                   else {
                     const groups:MicrosoftGraph.Group[] = response.value;
                     const personas:IPersonaProps[] = groups.map((group:MicrosoftGraph.Group, index:number) => {
@@ -178,7 +187,12 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
                     });
                     resolve(personas);
                   }
+                }).catch(error => { //Value is always undefined (error details are in above .get func)
+                  //Just catch to prevent "Uncaught (in promise)" console error
                 });
+              }).catch(error => {
+                console.error("Error with graphClient.then ->");
+                console.error(error);
               });
             });
 
@@ -209,7 +223,7 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
 
               //Look for CAS policy error (should be in both queries but just check the first)
               //"AADSTS53003: Access has been blocked by Conditional Access policies. The access policy does not allow token issuance. Trace ID: 53f94e25-27a1-4f11-8318-b4c794570800 Correlation ID: 003f1386-5365-4a10-9f5b-f762e1788619 Timestamp: 2023-12-28 13:51:19Z"
-              //@ts-ignore (for startsWith)
+              //@ts-ignore @typescript-eslint/TS2550 (for startsWith)
               if (typeof values[0] === "string" && values[0].startsWith("AADSTS53003:")) {
                 //error.code == "InteractionRequiredAuthError" // error.statusCode == -1
                 hideDialog = false;
@@ -235,7 +249,7 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
 
                 //Similar check for lack of approved Graph scopes due to none ever having been approved
                 //"AADSTS65001: The user or administrator has not consented to use the application with ID..."
-                //@ts-ignore (for startsWith)
+                //@ts-ignore @typescript-eslint/TS2550 (for startsWith)
                 if (typeof values[0] === "string" && values[0].startsWith("AADSTS65001:"))
                   errorMsg = "<em>users</em> and <em>groups</em>.";
 
@@ -307,13 +321,13 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
 
           //Check for enough Graph permissions to query calendar & events
           if (items.length > 0) {
-            if (items[0].personaType == "user") {
+            if (items[0].personaType === "user") {
               const graphScopes = this.props.getGraphScopes();
-              const correctScopes = graphScopes.filter((value:string) => value.indexOf("Calendars.Read") == 0 && value.indexOf("Calendars.ReadBasic") != 0);
-              if (correctScopes && correctScopes.length == 0) {
+              const correctScopes = graphScopes.filter((value:string) => value.indexOf("Calendars.Read") === 0 && value.indexOf("Calendars.ReadBasic") !== 0);
+              if (correctScopes && correctScopes.length === 0) {
                 //Show error dialog (after short delay)
                 setTimeout(() => {
-                  let errorMsg = "Your SharePoint tenant-level admins have not approved the <strong>calendar</strong> permission needed to query user (and shared mailbox) <em>Outlook calendars</em> and their <em>event data</em>.";
+                  const errorMsg = "Your SharePoint tenant-level admins have not approved the <strong>calendar</strong> permission needed to query user (and shared mailbox) <em>Outlook calendars</em> and their <em>event data</em>.";
                     //+ "The currently approved Graph API scopes include: " + (graphScopes.length > 0 ? graphScopes.join(", ") : "None");
                   
                   //Show error dialog
