@@ -1,7 +1,7 @@
 import * as React from 'react';
 import * as ReactDom from 'react-dom';
 import { DisplayMode, Version } from '@microsoft/sp-core-library';
-import { IPropertyPaneConfiguration, PropertyPaneTextField, PropertyPaneLabel, PropertyPaneToggle, PropertyPaneLink } 
+import { IPropertyPaneConfiguration, PropertyPaneTextField, PropertyPaneLabel, PropertyPaneToggle, PropertyPaneLink, PropertyPaneHorizontalRule } 
   from '@microsoft/sp-property-pane';
 import { BaseClientSideWebPart } from '@microsoft/sp-webpart-base';
 import { IReadonlyTheme } from '@microsoft/sp-component-base';
@@ -2471,6 +2471,13 @@ ${this.instanceId}
                   href: "https://github.com/spsprinkles/timeline-calendar/",
                   text: "GitHub Repository (public access)"
                 }),
+                (pageContext.legacyPageContext.aadInstanceUrl && pageContext.legacyPageContext.aadInstanceUrl.endsWith("microsoft.scloud") ? 
+                  PropertyPaneLink('',{
+                    target: '_blank',
+                    href: "https://dod365sec.spo.microsoft.scloud/sites/USAF-TipsToolsApps/",
+                    text: "👉 SIPR Tips, Tools & Apps site"
+                  }) : 
+                  PropertyPaneHorizontalRule()),
                 // PropertyPaneMarkdownContent({
                 //   markdown: webpartMD,
                 //   key: "webpartInfo"
