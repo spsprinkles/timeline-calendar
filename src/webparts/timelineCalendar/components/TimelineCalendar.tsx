@@ -307,6 +307,13 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   }
 
   private filterTextForXSS(input:string): string {
+    //Filter to get <html><head><body><div>*Actual content*
+    if (input.indexOf("html") !== -1) {
+      const elem = document.createElement("div");
+      elem.innerHTML = input;
+      input = elem.querySelector("div").outerHTML;
+    }
+    
     //Escape additional elements besides just <script>
     //const whiteList = xss.getDefaultWhiteList(); //or xss.whiteList;
     input = input.replace(/javascript:/g, ''); //Extra protection for IE
@@ -728,9 +735,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
               soapEnvelop += "<FieldRef Name='" + source.endDateField + "' />";
             
             soapEnvelop += "</ViewFields></viewFields>" + 
-              //Set rowLimit, without this the default is only 30 items
-              //"<rowLimit>1000</rowLimit>"; //Setting as 0 initially *seemed* to get all events but SP would stop at a seemingly random point
-              //Even with setting this to 5000 SP only returns 999 events and requires you to use pagination for next batch of events
+              //rowLimit not needed since this is querying for just one item to update it's details
               "<query><Query><Where>" +
                 "<Eq><FieldRef Name='ID'/><Value Type='Computed'>" + oEvent.spId.toString() + "</Value></Eq>" +
               "</Where></Query></query><queryOptions><QueryOptions>" + 
@@ -1511,19 +1516,36 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             data.value.forEach((view:any) => {
               if (list.view.toLowerCase() === view.Title.toLowerCase() || list.view.toLowerCase().indexOf(view.Id) !== -1) {
 								//TC.log("Got ViewQuery for '" + view.Title + "' view");
-								//view.ViewQuery "<Where><And><DateRangesOverlap><FieldRef Name="EventDate" /><FieldRef Name="EndDate" /><FieldRef Name="RecurrenceID" /><Value Type="DateTime"><Month /></Value></DateRangesOverlap><Eq><FieldRef Name="Category" /><Value Type="Text">Birthday</Value></Eq></And></Where>"
-								//cal.viewFilter = view.ViewQuery.replace("<Month />", "<Year />");
-								
-								//Extract just the CAML filter portion
-								const droIndex = view.ViewQuery.indexOf('</DateRangesOverlap>');
-								const endIndex = view.ViewQuery.lastIndexOf('</And></Where>');
+								//Legacy calendar view (view.ViewType: "CALENDAR") & Standard w/ Recurrence:
+                //"<Where><And><DateRangesOverlap><FieldRef Name="EventDate" /><FieldRef Name="EndDate" /><FieldRef Name="RecurrenceID" /><Value Type="DateTime"><Month /></Value></DateRangesOverlap><Eq><FieldRef Name="Category" /><Value Type="Text">Birthday</Value></Eq></And></Where>"
+                //Modern list calendar view (view.ViewType: "HTML" && view.ViewType2: "MODERNCALENDAR"):
+                //"<Where><DateRangesOverlap><FieldRef Name=\"StartDate\" /><FieldRef Name=\"EndDate\" /><Value Type=\"DateTime\"><Month /></Value></DateRangesOverlap></Where>"
+								//Could also be blank "" or "<Where><Eq><FieldRef Name=\"MultiChoice\" /><Value Type=\"Text\">Category 1</Value></Eq></Where>"
+                //And <OrderBy><FieldRef Name=\"ID\" /></OrderBy> could be before <Where> as part of the ViewQuery
+
+								//Find DateRangeOverlap & Where positions
+								const droStartIndex = view.ViewQuery.indexOf('<DateRangesOverlap>');
+                const droEndIndex = view.ViewQuery.indexOf('</DateRangesOverlap>');
+								const andWhereEndIndex = view.ViewQuery.lastIndexOf('</And></Where>');
 								const whereStartIndex = view.ViewQuery.indexOf('<Where>');
 								const whereEndIndex = view.ViewQuery.lastIndexOf('</Where>');
-								//Look for Calendar & Standard w/ Recurrence views (they have <DateRangesOverlap>)) //or add view.ViewType: "CALENDAR"
-								if (droIndex > -1 && endIndex > -1)
-									list.viewFilter = view.ViewQuery.substring(droIndex+20, endIndex);
+                
+                //Ignore DateRangeOverlap & extract just the actual filter portion
+								if (droEndIndex > -1 && andWhereEndIndex > -1) //legacy calendar views
+									list.viewFilter = view.ViewQuery.substring(droEndIndex+20, andWhereEndIndex);
+                else if (droStartIndex > -1 && droEndIndex > -1) { //modern calendar views
+                  const noDroWhereQuery = view.ViewQuery.substring(0, droStartIndex) + view.ViewQuery.substring(droEndIndex+20)
+                  if (noDroWhereQuery == "<Where></Where>")
+                    list.viewFilter = "";
+                  else //Just get the query inside the <Where>
+                    list.viewFilter = view.ViewQuery.substring(whereStartIndex+7, whereEndIndex);
+                }
+                //Just get the query inside the <Where>
 								else if (whereStartIndex > -1)
 									list.viewFilter = view.ViewQuery.substring(whereStartIndex+7, whereEndIndex);
+                //No <Where> so ensure a blank filter is set in case user switched from another view
+                else
+                  list.viewFilter = "";
 								
                 //Examples
                 //-------------------------
@@ -2135,9 +2157,11 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       returnVal += "<FieldRef Name='" + list.endDateField + "' />";
     
     returnVal += "</ViewFields></viewFields>" + 
-    //Set rowLimit, without this the default is only 30 items
-    "<rowLimit>1000</rowLimit>"; //Setting as 0 initially *seemed* to get all events but SP would stop at a seemingly random point
-    //Even with setting this to 5000 SP only returns 999 events and requires you to use pagination for next batch of events
+    //Set a rowLimit, without this the default is only 30 items
+    "<rowLimit Paged=\"TRUE\">1000</rowLimit>"; //Even when setting this to 5000 SP only returns...
+    //  999 events for calendars
+    //  1000 events for non-calendars/lists
+    //...and requires you to use pagination for next batch of events.
     
     let query = "<query><Query><Where>"; //<Where> is the start of the ViewQuery property from calendar views
 
@@ -2158,9 +2182,9 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     if (list.isCalendar === false) {
       //Was an end date field provided?
       if (list.endDateField) //use both dates from the non-calendar
-      query += "<Or><Geq><FieldRef Name='" + list.startDateField + "'/><Value Type='DateTime'>" + this.getMinDate().toISOString() + "</Value></Geq>" +
-        "<Geq><FieldRef Name='" + list.endDateField + "'/><Value Type='DateTime'>" + this.getMinDate().toISOString() + "</Value></Geq>" +
-      "</Or>";
+      query += "<And><Geq><FieldRef Name='" + list.endDateField + "'/><Value Type='DateTime'>" + this.getMinDate().toISOString() + "</Value></Geq>" +
+        "<Leq><FieldRef Name='" + list.startDateField + "'/><Value Type='DateTime'>" + this.getMaxDate().toISOString() + "</Value></Leq>" +
+      "</And>";
       else //Only a start date was given
         query += "<Geq><FieldRef Name='" + list.startDateField + "'/><Value Type='DateTime'>" + this.getMinDate().toISOString() + "</Value></Geq>";
     }
@@ -2171,9 +2195,10 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         query +=
         "<And>" +
           //Prevents returning older events that aren't in viewable range
+          //Moving this below <DateRangeOverlap> caused threshold errors in large calendars (and also not having it)
           "<Geq><FieldRef Name='EndDate'/><Value Type='DateTime'>" + this.getMinDate().toISOString() + "</Value></Geq>" +
           "<DateRangesOverlap>" + 
-            "<FieldRef Name='EventDate' />" + 
+            "<FieldRef Name='EventDate' />" +
             "<FieldRef Name='EndDate' />" + 
             "<FieldRef Name='RecurrenceID' />" + 
             "<Value Type='DateTime'><Year/></Value>" + //No value or <Year/> are the same
@@ -2186,13 +2211,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       query += "</And>";
     
     query += "</Where>";
+
     
     returnVal += query + /*"<OrderBy>" + 
       "<FieldRef Name='EventDate' />" + 
     "</OrderBy>" +*/
     "</Query></query><queryOptions><QueryOptions>" + 
-      //"<CalendarDate>2015-08-22T12:00:00.000Z</CalendarDate>" + //today is the default if no element provided
-      (nextPageDetail ? "<Paging ListItemCollectionPositionNext='" + nextPageDetail + "' />" : "" ) +
+      //(calendarDate ? "<CalendarDate>" + calendarDate + "</CalendarDate>" : "") + //today is the default if no element provided
+      (nextPageDetail ? "<Paging ListItemCollectionPositionNext='" + nextPageDetail + "' />" : "" ) + 
       (includeRecurrence ? "<RecurrencePatternXMLVersion>v3</RecurrencePatternXMLVersion>" : "") + 
       (includeRecurrence ? "<ExpandRecurrence>TRUE</ExpandRecurrence>" : "") + 
       (includeRecurrence ? "<RecurrenceOrderBy>TRUE</RecurrenceOrderBy>" : "") +
@@ -2307,17 +2333,31 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           
       //   return; //don't proceed with the below
       // }
+      //TODO: Or errors like this
+      // <soap:Body>
+      //   <soap:Fault>
+      //     <faultcode>soap:Server</faultcode>
+      //     <faultstring>Exception of type 'Microsoft.SharePoint.SoapServer.SoapServerException' was thrown.</faultstring>
+      //     <detail>
+      //       <errorstring xmlns="http://schemas.microsoft.com/sharepoint/soap/">The attempted operation is prohibited because it exceeds the list view threshold.</errorstring>
+      //       <errorcode xmlns="http://schemas.microsoft.com/sharepoint/soap/">0x80070024</errorcode>
+      //     </detail>
+      //   </soap:Fault>
+      // </soap:Body>
+
+      //Valid data response
+      // <soap:Body>
+      //     <GetListItemsResponse xmlns="...">
+      //       <GetListItemsResult>
+      //         <listitems xmlns:s='...' ... xmlns:z='#RowsetSchema'>
+      //           <rs:data ItemCount="552" ListItemCollectionPositionNext="Paged=Next&amp;p_StartTimeUTC=20261202T130001Z">
+      //             <z:row ows_Title='Event 495'...
       
       //At this point we should have a valid list response
       //let numOfValidItems = 0;
       let lastStartDate:Date = null;
       const fieldKeys = this.getFieldKeys();
       
-      //Need to determine which date fields to use (calendar vs non-calendars)
-      //const startFieldName = (list.isCalendar == false ? "ows_" + list.startDateField : "ows_EventDate"); //must have a start date
-      //const endFieldName = (list.isCalendar == false ? (list.endDateField ? "ows_" + list.endDateField : null) : "ows_EndDate");
-      //moved...
-
       let pagingDetails:string = null;
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(strXml, "application/xml");
@@ -2329,8 +2369,6 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         //Loop over the event/data results
         else if(elem.nodeName === "z:row") { //actual data is here
           const itemDateInfo = this.getSPItemDates(list, listConfigs, elem);
-          //const startFieldName = "ows_" + list.startDateField;
-          //const endFieldName = (list.endDateField ? "ows_" + list.endDateField : null);
           if (itemDateInfo.eventStartDate == null) //Cannot add events with no start date
               return; //skip this one
 
@@ -2405,16 +2443,26 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //Check if more data should be queried
       if (pagingDetails) {
         let validStartTime = true; //initial
-        //Non-calendars seem to be returning these formats:
-        // > Paged=Next&p_StartTimeUTC=00000101T588376552265528Z - this one is too long?
-        // > Paged=Next&p_StartTimeUTC=18991230T000001Z - this one is invalid
-        //Which even when using that in the next call it returns the same items. So prevent these calls from occuring by checking the "T" position
+        //Calendars return these formats (even if user specifies dateInUtc=false):
+        // > Paged=Next&p_StartTimeUTC=20250702T120001Z - Valid result!
+        // > Paged=Next&p_StartTimeUTC=18991230T000001Z - Invalid date (starts with 1899)
+        // > Paged=Next&p_StartTimeUTC=00000101T588376552265528Z - Invalid, too long
+        //    Using these invalid results in the next call it returns the same items, so prevent these follow-on calls
+        //Non-calendars return this format:
+        // > Paged=TRUE&p_ID=40
         const searchParams = new URLSearchParams(pagingDetails);
-        const strTemp = searchParams.get("p_StartTimeUTC");
-        //@ts-ignore @typescript-eslint/TS2550 (for startsWith)
-        if (strTemp.indexOf("T") !== 8 || strTemp.startsWith("1899")) {
-          validStartTime = false;
-          console.log(list.listName + " returned an invalid ListItemCollectionPositionNext: " + pagingDetails + " (ignoring)");
+        if (list.isCalendar) {
+          const strTemp = searchParams.get("p_StartTimeUTC");
+          //@ts-ignore @typescript-eslint/TS2550 (for startsWith)
+          if (strTemp && (strTemp.indexOf("T") !== 8 || strTemp.startsWith("1899"))) {
+            validStartTime = false;
+            console.log(list.listName + " returned an invalid ListItemCollectionPositionNext: " + pagingDetails + " (ignoring)");
+          }
+        }
+        else { //non-calendar list
+          const strTemp = searchParams.get("p_ID");
+          if (!strTemp)
+              validStartTime = false;
         }
 
         if (validStartTime && lastStartDate < this.getMaxDate()) {						
@@ -2442,7 +2490,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     }))
   }
 
-  private async queryCalendar(calObj:ICalendarItem, calConfigs:ICalendarConfigs, existingEvent:any, skipNumber:number): Promise<void> {
+  private async queryCalendar(calObj:ICalendarItem, calConfigs:ICalendarConfigs, existingEvent:any, skipNumber:number, startDate?:string, endDate?:string): Promise<void> {
     //First Promise return but later return again from the Graph call
     return await this.props.graphClient.then((client:MSGraphClientV3): void => {
       const appendValidGraphEventProp = (name:string): string => {
@@ -2504,7 +2552,20 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           (existingEventId ? "/events/" + existingEventId : "/calendarView");
 
       //Build API call variables
-      const basicQueryStringParams = (existingEventId ? '' : `startDateTime=${this.getMinDate().toISOString()}&endDateTime=${this.getMaxDate().toISOString()}`);
+      if (!existingEventId && !startDate) {
+        //Graph API limited to querying max 5 year date range/span
+        if ((this.getMaxDate().getTime() - this.getMinDate().getTime()) / (1000*60*60*24) > 1825) {
+          startDate = this.getMinDate().toISOString();
+          const tempDate = new Date(this.getMinDate().getTime());
+          tempDate.setFullYear(tempDate.getFullYear()+3); //add 3 years
+          endDate = tempDate.toISOString();
+        }
+        else {
+          startDate = this.getMinDate().toISOString();
+          endDate = this.getMaxDate().toISOString();
+        }
+      }
+      const basicQueryStringParams = (existingEventId ? '' : `startDateTime=${startDate}&endDateTime=${endDate}`);
       const filter = (existingEventId ? "" : (calObj.filter ? calObj.filter.trim() : ""));
       
       //Get calender view events
@@ -2512,7 +2573,6 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       return client.api(apiURL).query(basicQueryStringParams)
       //TODO: 500 or higher?
       .select(selectFields).top(500).skip(skipNumber)
-      //TODO: .filter("sensitivity ne 'private'")
       .filter(filter)
       //Make the charm/icon value be included
       .expand("singleValueExtendedProperties($filter=id eq 'Integer {11000E07-B51B-40D6-AF21-CAA85EDAB1D0} Id 0x0027')")
@@ -2580,7 +2640,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
                     //Find duplicate events and remove them
                     const itemEvents = this._dsItems.get({
                       filter: function (item:any) {
-                        return (item.spId === oEvent.spId); // && item.id != oEvent.id
+                        return (item.eventId === oEvent.eventId); // && item.id != oEvent.id
                       }
                     });
                     this._dsItems.remove(itemEvents);
@@ -2629,13 +2689,27 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
               this._dsItems.add(oEvent);
           });
 
-          //Check if more data should be queried
-          const nextLink = response["@odata.nextLink"] as string;
-          if (nextLink) {
-            //Query for more events (get the next page)
-            const eqIndex = nextLink.lastIndexOf("=");
-            const skipNumber = Number(nextLink.substring(eqIndex + 1));
-            return this.queryCalendar(calObj, calConfigs, existingEvent, skipNumber);
+          if (!existingEventId) {
+            //Check if more data (paging) should be queried
+            const nextLink = response["@odata.nextLink"] as string;
+            if (nextLink) {
+              //Query for more events (get the next page)
+              const eqIndex = nextLink.lastIndexOf("=");
+              const skipNumber = Number(nextLink.substring(eqIndex + 1));
+              return this.queryCalendar(calObj, calConfigs, existingEvent, skipNumber, startDate, endDate);
+            }
+            //Check if another date range should be queried
+            else if (new Date(endDate) < this.getMaxDate()) {
+              let tempDate = new Date(endDate);
+              tempDate.setMilliseconds(tempDate.getMilliseconds() + 1);
+              startDate = tempDate.toISOString();
+              tempDate.setFullYear(tempDate.getFullYear() + 3); //add 3 years
+              endDate = tempDate.toISOString();
+              if (tempDate > this.getMaxDate())
+                endDate = this.getMaxDate().toISOString();
+
+              return this.queryCalendar(calObj, calConfigs, existingEvent, skipNumber, startDate, endDate);
+            }
           }
         } //no error returned
       }) //end Graph.get()
