@@ -2354,10 +2354,10 @@ ${this.instanceId}
                 PropertyFieldNumber('minDays', {
                   key: 'minDays',
                   label: 'Days in past able to scroll back in time',
-                  description: 'Earliest day you can scroll to the left',
+                  description: 'Earliest day you can scroll to the left (note that legacy SharePoint calendars are still bound by 365 days)',
                   value: this.properties.minDays,
                   minValue: 0,
-                  maxValue: 365,
+                  //maxValue: 365,
                   precision: 0 //only whole number stored
                 }),
                 PropertyFieldNumber('maxDays', {
