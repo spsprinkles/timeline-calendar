@@ -74,6 +74,8 @@ export interface IListConfigs {
     dateInUtc?: boolean
     extendEndTimeAllDay?: boolean
     multipleCategories: "useFirst" | "useLast"
+    fieldValueMappings: any
+    showFolderView: boolean
 }
 
 export interface IListItem {

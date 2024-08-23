@@ -1418,7 +1418,7 @@ ${this.instanceId}
                                     //Only add applicable fields for the "Event Title"
                                     if (field.TypeAsString === "Calculated" || (field.ReadOnlyField === false && //Calculated is first because it's a ReadOnlyField
                                         (field.TypeAsString === "Text" || field.TypeAsString === "Choice" || field.TypeAsString === "Lookup" || 
-                                           field.TypeAsString === "User")))
+                                           field.TypeAsString === "User" || field.TypeAsString === "File"))) //File for docLib FileLeafRef (Name)
                                       promiseData.push({
                                         key: field.InternalName,
                                         text: field.Title,
@@ -2342,7 +2342,7 @@ ${this.instanceId}
                   description: 'Beginning day shown for the initial timeline load',
                   value: this.properties.initialStartDays,
                   minValue: 0,
-                  maxValue: 365
+                  //maxValue: 365
                 }),
                 PropertyFieldNumber('initialEndDays', {
                   key: 'initialEndDays',
