@@ -76,6 +76,7 @@ export interface IListConfigs {
     multipleCategories: "useFirst" | "useLast"
     fieldValueMappings: any
     showFolderView: boolean
+    limitHolidayToRow: boolean
 }
 
 export interface IListItem {

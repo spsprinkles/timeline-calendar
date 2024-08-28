@@ -906,7 +906,7 @@ ${this.instanceId}
                                 //RootFolder/Name == "Workflow History"
                                 //RootFolder/ServerRelativeUrl == "/sites/TipsToolsApps/Lists/Workflow History"
                                 spHttpClient.get(item.siteUrl + "/_api/web/lists?$select=BaseTemplate,BaseType,Id,Hidden,Title,RootFolder/ServerRelativeUrl" +
-                                  "&$expand=RootFolder&$filter=IsCatalog eq false and IsPrivate eq false", SPHttpClient.configurations.v1)
+                                  "&$expand=RootFolder&$filter=IsCatalog eq false and IsPrivate eq false&$orderby=Title", SPHttpClient.configurations.v1)
                                   .then((response: SPHttpClientResponse) => {
                                     if (response.ok) {
                                       //TODO: Instead call .text() and then try/catch with JSON.parse?
@@ -1271,7 +1271,7 @@ ${this.instanceId}
 
                               //Get non-personal (public) and non-hidden views
                               const viewPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
-                                spHttpClient.get(item.siteUrl + "/_api/web/lists('" + item.list + "')/views?$select=BaseViewId,Id,ServerRelativeUrl,Title,ViewType,ViewQuery&$filter=PersonalView ne true and Hidden ne true", SPHttpClient.configurations.v1)
+                                spHttpClient.get(item.siteUrl + "/_api/web/lists('" + item.list + "')/views?$select=BaseViewId,Id,ServerRelativeUrl,Title,ViewType,ViewQuery&$filter=PersonalView ne true and Hidden ne true&$orderby=Title", SPHttpClient.configurations.v1)
                                   .then((response: SPHttpClientResponse) => {
                                     if (response.ok) {
                                       response.json().then((data:any) => {
@@ -1363,7 +1363,7 @@ ${this.instanceId}
                                   
                                   //TODO: Add to $select: ,Choices
                                   //  so that if selected, show user modal asking if these should be added to list of Categories
-                                  spHttpClient.get(item.siteUrl + "/_api/web/lists('" + item.list + "')/fields?$select=Id,InternalName,Title,ReadOnlyField,TypeAsString,OutputType&$filter=TypeAsString ne 'Computed' and Hidden eq false", SPHttpClient.configurations.v1) //was: ReadOnlyField eq false and 
+                                  spHttpClient.get(item.siteUrl + "/_api/web/lists('" + item.list + "')/fields?$select=Id,InternalName,Title,ReadOnlyField,TypeAsString,OutputType&$filter=TypeAsString ne 'Computed' and Hidden eq false&$orderby=Title", SPHttpClient.configurations.v1) //was: ReadOnlyField eq false and 
                                     .then((response: SPHttpClientResponse) => {
                                       if (response.ok) {
                                         //TODO: Consider .text() here and then try/catch with JSON.parse
@@ -1884,13 +1884,14 @@ ${this.instanceId}
 
                                 //For user calendars, need to make sure current user has at least "view all details" permission or access denied error will be thrown getting events
                                 const persona = item.persona[0];
+                                const resourceId = (option.key as string).split(":")[1]; //format "calendar:Id"
                                 if (persona.personaType == "user")
                                   this._graphClient.then((client:MSGraphClientV3): void => {
                                     const now = new Date();
                                     const later = new Date();
                                     later.setDate(later.getDate() + 1);
                                     //Just try to get any event to see if access denied is returned
-                                    client.api("/users/" + persona.key + "/calendars/" + option.key + "/calendarView")
+                                    client.api("/users/" + persona.mail + "/calendars/" + resourceId + "/calendarView")
                                     .query(`startDateTime=${now.toISOString()}&endDateTime=${later.toISOString()}`)
                                     .select("id,subject").top(1)
                                     .get((error:GraphError, response:any, rawResponse?:any) => {
@@ -1976,7 +1977,7 @@ ${this.instanceId}
                                       const calendars:MicrosoftGraph.Calendar[] = response.value;
                                       calendars.forEach(calendar => {
                                         //Exclude other users' calendars shared with the selected user
-                                        if (calendar.owner.address != persona.mail)
+                                        if (calendar.owner === null || calendar.owner.address != persona.mail)
                                           return;
 
                                         //Ignore these known calendars also in case the person selects themself
@@ -1993,50 +1994,6 @@ ${this.instanceId}
                                   .catch(reason => { //even with no reject above, this is undefined
                                     onCustomFieldValidation(field.id, errorMsg);
                                   })
-
-                                  /* None of these worked
-                                  .get().then(response => {
-                                    let promiseData:IDropdownOption[] = [];
-                                    promiseData.push({
-                                      key: "", //blank
-                                      text: ""
-                                    });
-
-                                    const calendars:MicrosoftGraph.Calendar[] = response.value;
-                                    calendars.forEach(calendar => {
-                                      //Exclude other users' calendars shared with the selected user
-                                      if (calendar.owner.address != persona.mail)
-                                        return;
-
-                                      //Ignore these known calendars also in case the person selects themself
-                                      if (calendar.name != "United States holidays" && calendar.name != "Birthdays")
-                                        promiseData.push({
-                                          key: calendar.id,
-                                          text: calendar.name
-                                        });
-                                    });
-                                    resolve(promiseData);
-                                  //Handle any errors
-                                  })//, failureReason => {
-                                  .catch((error:GraphError) => {
-                                    // If only given "Can view titles and locations" (not Can view all details+),
-                                    //   when querying the calendar this error is produced:
-                                    // code: "ErrorAccessDenied"
-                                    // message: "Access is denied. Check credentials and try again."
-
-                                    //Reset the promise cache in case of temp issue
-                                    self.dataCache.calendars[personaId] = null;
-                                          
-                                    //Provide a clearer error message in case of no permissions to calendar
-                                    if (error.message == "The specified object was not found in the store.") {
-                                      //reject("something");
-                                      onCustomFieldValidation(field.id, "No permissions to load calendars for selected user");
-                                    }
-                                    else {
-                                      onCustomFieldValidation(field.id, error.message);
-                                      reject();
-                                    }
-                                  })*/
                                 });
                               });
 

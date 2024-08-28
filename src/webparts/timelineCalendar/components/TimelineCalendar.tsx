@@ -1624,6 +1624,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         configs.fieldValueMappings = {};
     if (configs.showFolderView == null || typeof configs.showFolderView !== "boolean")
         configs.showFolderView = false;
+    if (configs.limitHolidayToRow == null || typeof configs.limitHolidayToRow !== "boolean")
+        configs.limitHolidayToRow = false;
     //When adding new props, consider the effects of the prop *not* being provided/set at all
 
     //Add Category props to configs (classField and className)
@@ -2408,8 +2410,16 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             
             //Add group (row/swimlane)
             let multipleValuesFound = false;
-            if (listConfigs.groupId)
-              oEvent.group = listConfigs.groupId;
+            if (listConfigs.groupId) {
+              //When a class field (Category) is selected and a specific Row is selected
+              if (listConfigs.classField && listConfigs.limitHolidayToRow === false 
+                    && oEvent.className && oEvent.className === this.props.ensureValidClassName(this.props.holidayCategories)) {
+                oEvent.type = "background"; //change to background
+                oEvent.group = null; //apply to entire timeline
+              }
+              else
+                oEvent.group = listConfigs.groupId;
+            }
             else if (listConfigs.groupField && this.props.groups) {
               //Find the associated group to assign the item to
               let groupFieldValue = elem.getAttribute("ows_" + listConfigs.groupField);
@@ -2452,7 +2462,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
                   //Find the associated group from it's name
                   this.props.groups.every((group:IGroupItem) => {
                     if (group.name === groupFieldValue) {
-                      oEvent.group = group.uniqueId;
+                      //When a class field (Category) is selected and a *field* for Row selected
+                      if (listConfigs.classField && listConfigs.limitHolidayToRow === false 
+                        && oEvent.className && oEvent.className === this.props.ensureValidClassName(this.props.holidayCategories)) {
+                        oEvent.type = "background"; //change to background
+                        oEvent.group = null; //apply to entire timeline
+                      }
+                      else
+                        oEvent.group = group.uniqueId;
                       return false; //exit
                     }
                     else return true; //keep looping
@@ -2569,7 +2586,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       if (existingEvent && existingEvent.eventId)
         existingEventId = existingEvent.eventId;
       let apiURL = "";
-      const resourceId = calObj.resource.split(":")[0]; //format "calendar:Id"
+      const resourceId = calObj.resource.split(":")[1]; //format "calendar:Id"
       if (calObj.persona[0].personaType === "user")
         apiURL = "/users/" + calObj.persona[0].mail + "/calendars/" + resourceId + 
           //Single event query (for post user clicking an item) or multiple events query
