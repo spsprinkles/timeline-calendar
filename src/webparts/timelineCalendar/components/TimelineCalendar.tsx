@@ -2739,8 +2739,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             const nextLink = response["@odata.nextLink"] as string;
             if (nextLink) {
               //Query for more events (get the next page)
-              const eqIndex = nextLink.lastIndexOf("=");
-              const skipNumber = Number(nextLink.substring(eqIndex + 1));
+              const url = new URL(nextLink);
+              skipNumber = Number(url.searchParams.get("$skip"));
               return this.queryCalendar(calObj, calConfigs, existingEvent, skipNumber, startDate, endDate);
             }
             //Check if another date range should be queried
@@ -2752,8 +2752,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
               endDate = tempDate.toISOString();
               if (tempDate > this.getMaxDate())
                 endDate = this.getMaxDate().toISOString();
-
-              return this.queryCalendar(calObj, calConfigs, existingEvent, skipNumber, startDate, endDate);
+              //skipNumber resets to 0 for this next date batch
+              return this.queryCalendar(calObj, calConfigs, existingEvent, 0, startDate, endDate);
             }
           }
         } //no error returned
