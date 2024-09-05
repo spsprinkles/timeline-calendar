@@ -307,11 +307,15 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   }
 
   private filterTextForXSS(input:string): string {
-    //Filter to get <html><head><body><div>*Actual content*
-    if (input.indexOf("html") !== -1) {
+    if (input == null)
+      return "";
+
+    //Filter to get Actual content from <html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><body><div>Actual content
+    if (input.indexOf("<html>") !== -1) {
       const elem = document.createElement("div");
-      elem.innerHTML = input;
-      input = elem.querySelector("div").outerHTML;
+      elem.innerHTML = input; //removes html, head, and body tags but leaves <meta> tags
+      //Filter out <meta> tags and trim to remove \n\n characters
+      input = elem.innerHTML.replace(/<\/?meta*[^<>]*>/ig, '').trim();
     }
     
     //Escape additional elements besides just <script>
@@ -358,6 +362,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     //Documentation: https://jsxss.com/en/options.html
     input = filterXSS(input, {
       whiteList: whiteList,
+      stripIgnoreTag: true, //prevent the "[removed]" text processing
       stripIgnoreTagBody: true, //this would completely remove <iframe> vs. escaping it
       //attributes *not* in the whitelist for a tag
       onIgnoreTagAttr: function(tag:string, name:string, value:string, isWhiteAttr:boolean) {
