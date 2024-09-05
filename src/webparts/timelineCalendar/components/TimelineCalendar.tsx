@@ -362,7 +362,6 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     //Documentation: https://jsxss.com/en/options.html
     input = filterXSS(input, {
       whiteList: whiteList,
-      stripIgnoreTag: true, //prevent the "[removed]" text processing
       stripIgnoreTagBody: true, //this would completely remove <iframe> vs. escaping it
       //attributes *not* in the whitelist for a tag
       onIgnoreTagAttr: function(tag:string, name:string, value:string, isWhiteAttr:boolean) {
