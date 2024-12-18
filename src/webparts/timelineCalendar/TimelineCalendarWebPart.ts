@@ -69,6 +69,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     calFilterQuery: {} as any
   };
   private _graphClient: Promise<MSGraphClientV3> = null;
+  private _accessToken: string;
   private _graphScopes: string[] = [];
   private _messageListener = (event:MessageEvent):void => {
     //Look for only "local" events (ignoring OWA webshell messages: https://webshell.dodsuite.office365.us)
@@ -115,8 +116,16 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     }*/
 
     //Get user's groups in case Outlook Calendars collection/pane is opened
-    if (this.displayMode === DisplayMode.Edit && window.location.hash !== "#noMemberOfList") //for temp testing
+    if (this.displayMode === DisplayMode.Edit && window.location.hash !== "#noMemberOfList") { //for temp testing
       this.getUserMemberOf();
+
+      //Also get access token for checking scopes
+      this.context.aadTokenProviderFactory.getTokenProvider().then(provider => {
+        provider.getToken(this.context.pageContext.legacyPageContext.msGraphEndpointUrl).then(value => {
+          this._accessToken = value;
+        });
+      });
+    }
 
     //If there's no existing data, add some default categories and groups to give the user a visual starting point/example
     if (this.properties.categories == null)
@@ -238,8 +247,9 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
         //Need to exclude security groups
         .filter("groupTypes/any(c:c eq 'Unified')") //filter could also be "mailEnabled eq true" with &$count=true
         .header('ConsistencyLevel', 'eventual').count() //both needed for filter to work
+        //.responseType(ResponseType.RAW)
         .orderby("displayName") //ascending is default
-        .get((error:GraphError, response:any, rawResponse?:any) => {
+        .get((error:GraphError, response:any, rawResponse?:any) => { //not fired when RAW result used
           //Handle errors
           if (error) {
             //Nothing needed
@@ -276,7 +286,17 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
               //console.log(aGroup.displayName);
             }
           }
-        });
+        })
+        // This is fired when RAW result is used
+        // .then((value: Response) => {
+        //   console.log(value.headers.get("X-Ms-Ags-Diagnostic"));
+        //   console.log(value.headers.get("Client-Request-Id"));
+        //   console.log(value.headers.get("Request-Id"));
+        //   return value.json();
+        // })
+        // .then(data => {
+        //   console.log(data);
+        // })
       })
       .catch (error => {
         console.error(error);
@@ -437,6 +457,31 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
   }
 
   private getGraphScopes(returnError?:boolean): string[] {
+    try {
+      //Alt approach here: https://github.com/auth0/jwt-decode/blob/main/lib/index.ts
+      const base64Url = this._accessToken.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(''));
+
+      this._graphScopes = JSON.parse(jsonPayload).scp.split(' ');
+      //Remove the "profile", "openid", "email", and ".default" scopes
+      this._graphScopes = this._graphScopes.filter((value:string) => {
+        switch (value) {
+          case "profile":
+          case "openid":
+          case "email":
+            return false;
+          
+          default:
+            return true;
+        }
+      });
+    }
+    catch (e) {}
+
+    /* Prior code before SPO change to no longer use sessionStorage
     //Look for and save Graph scope information
     for (const key in sessionStorage) {
       //@ts-ignore @typescript-eslint/TS2550 (for startsWith)
@@ -473,10 +518,10 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
         }
       }
     }
+    */
 
     //If returnError specified, return the error details if there were no scopes found
-    if ((this._graphScopes == null || this._graphScopes.length === 0) && returnError 
-          && sessionStorage["msal.error.description"])
+    if ((this._graphScopes == null || this._graphScopes.length === 0) && returnError && sessionStorage["msal.error.description"])
       this._graphScopes = [sessionStorage["msal.error.description"]];
 
     return this._graphScopes;
@@ -776,13 +821,16 @@ ${this.instanceId}
                           //Compare to user entered domain value
                           if (value.indexOf(rootUrl) != 0)
                             return 'Site must be on the same domain';
+                          else if (value === rootUrl)
+                            value = "/";
                           else //Make the URL relative
                             value = value.replace(rootUrl, "");
                         }
 
-                        //Remove any trailing slash
-                        if (value.lastIndexOf("/") + 1 == value.length)
-                        value = value.substring(0, value.length-1);
+                        //Remove any trailing slash, ex: https://usaf.dps.mil/sites/TipsToolsApps/ <--
+                        //But still allow the root tenant (just "/") URL
+                        if (value !== "/" && value.lastIndexOf("/") + 1 === value.length)
+                          value = value.substring(0, value.length-1);
 
                         //Get just the base site URL if these known URL formats were provided
                         value = value.split("/Lists/")[0];
@@ -791,7 +839,12 @@ ${this.instanceId}
                         value = value.split("/pages/")[0];
                         value = value.split("/SitePages/")[0];
                         value = value.split("/sitepages/")[0];
+                        value = value.split("/_layouts/")[0];
                         //TODO for library: https://usaf.dps.mil/teams/UA-App-VCP/csktest/ODSTest/Forms/AllItems.aspx
+
+                        //Final check to prevent blank URL
+                        if (value === "")
+                          value = "/";
 
                         //Look if .aspx is still at end of the URL to warn user
                         //@ts-ignore @typescript-eslint/TS2550 (for endsWith)
@@ -800,6 +853,10 @@ ${this.instanceId}
                         
                         //Update the field value with the shortened/processed URL
                         item.siteUrl = value;
+                        
+                        //Account for root site "/" URL
+                        if (value === "/")
+                          value = ""; //so that the below REST call works (or use legacyPageContext.portalUrl)
 
                         //Look for existing web check and return it's promise
                         if (self.dataCache.webs[value])
@@ -898,6 +955,9 @@ ${this.instanceId}
                               if (self.dataCache.lists[item.siteUrl])
                                 return self.dataCache.lists[item.siteUrl];
 
+                              //Account for root site "/" URL so that the below REST call works (or use legacyPageContext.portalUrl)
+                              const siteUrl = (item.siteUrl === "/" ? "" : item.siteUrl);
+
                               //Get non-catalog, "regular" lists from the site
                               const listPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
                                 //Was including "and BaseTemplate le 106" but that cut out CustomGrid lists created by exporting Excel data
@@ -905,7 +965,7 @@ ${this.instanceId}
                                 //https://github.com/pnp/pnpcore/blob/dev/src/sdk/PnP.Core/Model/SharePoint/Core/Public/Enums/ListTemplateType.cs
                                 //RootFolder/Name == "Workflow History"
                                 //RootFolder/ServerRelativeUrl == "/sites/TipsToolsApps/Lists/Workflow History"
-                                spHttpClient.get(item.siteUrl + "/_api/web/lists?$select=BaseTemplate,BaseType,Id,Hidden,Title,RootFolder/ServerRelativeUrl" +
+                                spHttpClient.get(siteUrl + "/_api/web/lists?$select=BaseTemplate,BaseType,Id,Hidden,Title,RootFolder/ServerRelativeUrl" +
                                   "&$expand=RootFolder&$filter=IsCatalog eq false and IsPrivate eq false&$orderby=Title", SPHttpClient.configurations.v1)
                                   .then((response: SPHttpClientResponse) => {
                                     if (response.ok) {
@@ -1174,6 +1234,11 @@ ${this.instanceId}
                                             text: "Calendars",
                                             itemType: DropdownMenuItemType.Header
                                           });
+                                          promiseData.push({
+                                            key: "divider1",
+                                            text: "",
+                                            itemType: DropdownMenuItemType.Divider
+                                          });
                                           promiseData = promiseData.concat(calendars);
                                         }
 
@@ -1184,6 +1249,11 @@ ${this.instanceId}
                                             text: "Lists",
                                             itemType: DropdownMenuItemType.Header
                                           });
+                                          promiseData.push({
+                                            key: "divider2",
+                                            text: "",
+                                            itemType: DropdownMenuItemType.Divider
+                                          });
                                           promiseData = promiseData.concat(lists);
                                         }
 
@@ -1193,6 +1263,11 @@ ${this.instanceId}
                                             key: "othersHeader",
                                             text: "Others",
                                             itemType: DropdownMenuItemType.Header
+                                          });
+                                          promiseData.push({
+                                            key: "divider3",
+                                            text: "",
+                                            itemType: DropdownMenuItemType.Divider
                                           });
                                           promiseData = promiseData.concat(others);
                                         }
@@ -1269,9 +1344,12 @@ ${this.instanceId}
                               if (self.dataCache.views[item.list])
                                 return self.dataCache.views[item.list];
 
+                              //Account for root site "/" URL so that the below REST call works (or use legacyPageContext.portalUrl)
+                              const siteUrl = (item.siteUrl === "/" ? "" : item.siteUrl);
+
                               //Get non-personal (public) and non-hidden views
                               const viewPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
-                                spHttpClient.get(item.siteUrl + "/_api/web/lists('" + item.list + "')/views?$select=BaseViewId,Id,ServerRelativeUrl,Title,ViewType,ViewQuery&$filter=PersonalView ne true and Hidden ne true&$orderby=Title", SPHttpClient.configurations.v1)
+                                spHttpClient.get(siteUrl + "/_api/web/lists('" + item.list + "')/views?$select=BaseViewId,Id,ServerRelativeUrl,Title,ViewType,ViewQuery&$filter=PersonalView ne true and Hidden ne true&$orderby=Title", SPHttpClient.configurations.v1)
                                   .then((response: SPHttpClientResponse) => {
                                     if (response.ok) {
                                       response.json().then((data:any) => {
@@ -1357,13 +1435,16 @@ ${this.instanceId}
                               if (self.dataCache.fields[item.list] == null) {
                                 //Create a wrapper Promise to use later (needed to avoid an error calling response.json() multiple times)
                                 fieldPromise = new Promise<[]>((resolve, reject) => {
+                                  //Account for root site "/" URL so that the below REST call works (or use legacyPageContext.portalUrl)
+                                  const siteUrl = (item.siteUrl === "/" ? "" : item.siteUrl);
+
                                   //Reference: https://learn.microsoft.com/en-us/previous-versions/office/developer/sharepoint-2010/ms428806(v=office.14)
                                     //OutputType == 2 per above for text-based Calculated columns
                                     //OutputType == 4 per above for DateTIme-based Calculated columns
                                   
                                   //TODO: Add to $select: ,Choices
                                   //  so that if selected, show user modal asking if these should be added to list of Categories
-                                  spHttpClient.get(item.siteUrl + "/_api/web/lists('" + item.list + "')/fields?$select=Id,InternalName,Title,ReadOnlyField,TypeAsString,OutputType&$filter=TypeAsString ne 'Computed' and Hidden eq false&$orderby=Title", SPHttpClient.configurations.v1) //was: ReadOnlyField eq false and 
+                                  spHttpClient.get(siteUrl + "/_api/web/lists('" + item.list + "')/fields?$select=Id,InternalName,Title,ReadOnlyField,TypeAsString,OutputType&$filter=TypeAsString ne 'Computed' and Hidden eq false&$orderby=Title", SPHttpClient.configurations.v1) //was: ReadOnlyField eq false and 
                                     .then((response: SPHttpClientResponse) => {
                                       if (response.ok) {
                                         //TODO: Consider .text() here and then try/catch with JSON.parse
@@ -1575,18 +1656,37 @@ ${this.instanceId}
                                 //Build dropdown return promise
                                 const returnPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
                                   fieldPromise.then((fields:[]) => {
-                                    //Add a blank option
                                     const promiseData:IDropdownOption[] = [];
+                                    //Add a blank option (with header)
+                                    promiseData.push({
+                                      key: "blankHeader",
+                                      text: "Blank Category",
+                                      itemType: DropdownMenuItemType.Header
+                                    });
+                                    //Add divider
+                                    promiseData.push({
+                                      key: "divider1",
+                                      text: "",
+                                      itemType: DropdownMenuItemType.Divider
+                                    });
                                     promiseData.push({
                                       key: "", //blank
                                       text: ""
                                     });
+
                                     //Add fields header
                                     promiseData.push({
                                       key: "fieldsHeader",
                                       text: "Category Field",
                                       itemType: DropdownMenuItemType.Header
                                     });
+                                    //Add divider
+                                    promiseData.push({
+                                      key: "divider2",
+                                      text: "",
+                                      itemType: DropdownMenuItemType.Divider
+                                    });
+
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
                                       //Only add applicable fields
@@ -1612,6 +1712,13 @@ ${this.instanceId}
                                       text: "Static Category",
                                       itemType: DropdownMenuItemType.Header
                                     });
+                                    //Add divider
+                                    promiseData.push({
+                                      key: "divider3",
+                                      text: "",
+                                      itemType: DropdownMenuItemType.Divider
+                                    });
+
                                     //Add categories to dropdown
                                     if (this.properties.categories && this.properties.categories.length > 0)
                                       this.properties.categories.forEach((category:ICategoryItem) => {
@@ -1665,17 +1772,36 @@ ${this.instanceId}
                                 //Build dropdown return promise
                                 const returnPromise = new Promise<IDropdownOption[]>((resolve, reject) => {
                                   fieldPromise.then((fields:[]) => {
-                                    //Add a blank option
                                     const promiseData:IDropdownOption[] = [];
+
+                                    //Add a blank option//Add divider
+                                    promiseData.push({
+                                      key: "blankHeader",
+                                      text: "Blank Row/Swimlane",
+                                      itemType: DropdownMenuItemType.Header
+                                    });
+                                    //Add divider
+                                    promiseData.push({
+                                      key: "divider1",
+                                      text: "",
+                                      itemType: DropdownMenuItemType.Divider
+                                    });
                                     promiseData.push({
                                       key: "", //blank
                                       text: ""
                                     });
+
                                     //Add fields header
                                     promiseData.push({
                                       key: "fieldsHeader",
                                       text: "Row/Swimlane Field",
                                       itemType: DropdownMenuItemType.Header
+                                    });
+                                    //Add divider
+                                    promiseData.push({
+                                      key: "divider2",
+                                      text: "",
+                                      itemType: DropdownMenuItemType.Divider
                                     });
                                     //Add results to dropdown
                                     fields.forEach((field:any) => {
@@ -1698,6 +1824,12 @@ ${this.instanceId}
                                       key: "staticHeader",
                                       text: "Static Row/Swimlane",
                                       itemType: DropdownMenuItemType.Header
+                                    });
+                                    //Add divider
+                                    promiseData.push({
+                                      key: "divider3",
+                                      text: "",
+                                      itemType: DropdownMenuItemType.Divider
                                     });
                                     //Add rows/swimlanes to dropdown
                                     if (this.properties.groups && this.properties.groups.length > 0)
@@ -1839,7 +1971,7 @@ ${this.instanceId}
                             graphClient: this._graphClient,
                             getGraphScopes: this.getGraphScopes.bind(this),
                             onChange: (items:IPersonaProps[]) => {
-                              if (items.length == 0) {
+                              if (items.length === 0) {
                                 //neither helped
                                 onCustomFieldValidation(field.id, ''); //"" empty doesn't prevent
                                 onUpdate(field.id, null);
@@ -1882,10 +2014,10 @@ ${this.instanceId}
                               else {
                                 onUpdate(field.id, option.key);
 
-                                //For user calendars, need to make sure current user has at least "view all details" permission or access denied error will be thrown getting events
+                                //For user calendars check for at least "view all details" permission or access denied error will be thrown getting events
                                 const persona = item.persona[0];
-                                const resourceId = (option.key as string).split(":")[1]; //format "calendar:Id"
-                                if (persona.personaType == "user")
+                                if (persona.personaType == "user") {
+                                  const resourceId = (option.key as string).split(":")[1]; //format "calendar:Id"
                                   this._graphClient.then((client:MSGraphClientV3): void => {
                                     const now = new Date();
                                     const later = new Date();
@@ -1901,11 +2033,19 @@ ${this.instanceId}
                                     })
                                     .catch(reason => { //reason is undefined
                                       //Just catch to prevent "Uncaught (in promise)" console error
-                                    })
+                                    });
+
+                                    //Also check if this calendar id is the longer version (152 chars) that won't work for non-owners
+                                    if (resourceId.length > 150)
+                                      alert('The calendar you selected will not be queryable by users who are not owners of the mailbox.');
+                                    //Or can also check user's permissions...
+                                    // client.api("/users/" + persona.mail + "/calendars/" + resourceId)
+                                    // .select("canShare,canEdit")...
                                   })
                                   .catch (error => {
                                     console.error(error);
-                                  });;
+                                  });
+                                }
                               }
                             },
                             loadOptions: () => {
@@ -1915,11 +2055,6 @@ ${this.instanceId}
                               
                               //Look for an existing promise
                               if (self.dataCache.calendars[personaId]) {
-                                /*const test1 = self.dataCache.calendars[personaId];
-                                (test1 as Promise<IDropdownOption[]>).catch(reason => {
-                                  console.warn(reason);
-                                  onCustomFieldValidation(field.id, "in reused promise catch");
-                                });*/
                                 return self.dataCache.calendars[personaId];
                               }
 
@@ -1929,14 +2064,11 @@ ${this.instanceId}
                                 return new Promise<IDropdownOption[]>((resolve) => { //resolve, reject
                                   const promiseData:IDropdownOption[] = [];
                                   promiseData.push({
-                                    key: "calendar:default",
+                                    key: "calendar:default", //Planner would have been: plan:{id}
                                     text: "Calendar"
                                   });
                                   resolve(promiseData);
-                                });
-
-                                //TODO: Query for Planner plans
-                                //key: plan:{id}
+                                });                                
                               }
 
                               //For users, query to see which calendars are available/shared
@@ -1944,7 +2076,7 @@ ${this.instanceId}
                                 let errorMsg = null as string;
                                 //Get data
                                 this._graphClient.then((client:MSGraphClientV3): void => {
-                                  client.api("/users/" + persona.key + "/calendars").select("id,name,isDefaultCalendar,owner")
+                                  client.api("/users/" + persona.key + "/calendars").select("id,name,isDefaultCalendar,owner") //canEdit,canShare,sRemovable
                                   .get((error:GraphError, response:any, rawResponse?:any) => {
                                     if (error) {
                                       //When Calendars.Read[.*] Graph scope is not approved...
@@ -1980,10 +2112,11 @@ ${this.instanceId}
                                         if (calendar.owner === null || calendar.owner.address != persona.mail)
                                           return;
 
-                                        //Ignore these known calendars also in case the person selects themself
+                                        //Add calendar but ignore known calendars in case the person selects themself
                                         if (calendar.name !== "United States holidays" && calendar.name !== "Birthdays")
                                           promiseData.push({
-                                            key: "calendar:" + calendar.id,
+                                            //Use special "calendar" Graph keyword for the default calendar (to ensure all users can query it)
+                                            key: "calendar:" + (calendar.isDefaultCalendar ? "calendar" : calendar.id),
                                             text: calendar.name
                                           });
                                       });
@@ -2062,7 +2195,7 @@ ${this.instanceId}
                             const now = new Date();
                             const later = new Date();
                             later.setDate(later.getDate() + 1);
-                            
+
                             //Get sample calender view events just to test the input query
                             //return client.api(apiURL).query(`startDateTime=${this.getMinDate().toISOString()}&endDateTime=${this.getMaxDate().toISOString()}`)
                             client.api(apiURL).query(`startDateTime=${now.toISOString()}&endDateTime=${later.toISOString()}`)
@@ -2099,25 +2232,45 @@ ${this.instanceId}
                       //NOTE: Only fired when *initialy* rendered, not after other fields are changed
                       options: (fieldId: string, item: ICalendarItem) => {
                         const options: ICustomDropdownOption[] = [
-                          //Add blank entry
+                          //Add blank entry (with header)
+                          {
+                            key: "blankHeader",
+                            text: "Blank Category",
+                            itemType: DropdownMenuItemType.Header
+                          },
+                          //Add divider
+                          { key: "divider1",
+                            text: "",
+                            itemType: DropdownMenuItemType.Divider
+                          },
                           {key: "", text: ""},
+                          
                           //Add fields header
                           {
                             key: "fieldsHeader",
                             text: "Category Field",
                             itemType: DropdownMenuItemType.Header
                           },
+                          //Add divider
+                          { key: "divider2",
+                            text: "",
+                            itemType: DropdownMenuItemType.Divider
+                          },
                           //Add fields from Outlook events
                           { key: "Field:categories", text: "Categories" },
                           { key: "Field:showAs", text: "Show As" },
                           { key: "Field:charmIcon", text: "Charm/Icon" },
-
                           //Add static header
                           {
                             key: "staticHeader",
                             text: "Static Category",
                             itemType: DropdownMenuItemType.Header
-                          }
+                          },
+                          //Add divider
+                          { key: "divider3",
+                            text: "",
+                            itemType: DropdownMenuItemType.Divider
+                          },
                         ];
                         
                         //Add categories to dropdown
@@ -2156,7 +2309,18 @@ ${this.instanceId}
                       //NOTE: Only fired when *initialy* rendered, not after other fields are changed
                       options: (fieldId: string, item: IListItem) => {
                         const options: ICustomDropdownOption[] = [
-                          //Add blank entry
+                          //Add blank entry (with header)
+                          {
+                            key: "blankHeader",
+                            text: "Blank Row/Swimlane",
+                            itemType: DropdownMenuItemType.Header
+                          },
+                          //Add divider
+                          {
+                            key: "divider1",
+                            text: "",
+                            itemType: DropdownMenuItemType.Divider
+                          },
                           {key: "", text: ""},
                           //Add fields header
                           {
@@ -2164,16 +2328,27 @@ ${this.instanceId}
                             text: "Row/Swimlane Field",
                             itemType: DropdownMenuItemType.Header
                           },
+                          //Add divider
+                          {
+                            key: "divider2",
+                            text: "",
+                            itemType: DropdownMenuItemType.Divider
+                          },
                           //Add fields from Outlook events
                           { key: "Field:categories", text: "Categories" },
                           { key: "Field:showAs", text: "Show As" },
                           { key: "Field:charmIcon", text: "Charm/Icon" },
-                          
                           //Add static header
                           {
                             key: "staticHeader",
                             text: "Static Row/Swimlane",
                             itemType: DropdownMenuItemType.Header
+                          },
+                          //Add divider
+                          {
+                            key: "divider3",
+                            text: "",
+                            itemType: DropdownMenuItemType.Divider
                           }
                         ];
 
