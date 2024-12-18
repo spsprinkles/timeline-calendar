@@ -1196,7 +1196,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         weekendStart = new Date(this.options.min.getFullYear(), this.options.min.getMonth(), this.options.min.getDate() - 1);
       }
       else if (this.options.min.getDay() === 6) { //6 = Saturday
-        weekendStart = new Date(this.options.min.valueOf());
+        weekendStart = new Date(this.options.min.getFullYear(), this.options.min.getMonth(), this.options.min.getDate());
       }
       else {
         //Add days to get to Saturday

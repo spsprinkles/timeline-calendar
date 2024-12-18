@@ -255,10 +255,9 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
 
                 //Set sub-error message details if an error was found
                 if (errorMsg) {
-                  //const graphScopes = this.props.getGraphScopes();
-                  errorHeader = "Graph API searching permissions"; //had "not approved"
+                  errorHeader = "Graph API searching permissions";
                   errorMsg = "Your SharePoint tenant-level admins have not approved the permissions needed to <strong>search</strong> for " 
-                    + errorMsg;// + " To view the currently approved Graph API scopes, refer to the last page of the properties editing panel of this web part.";
+                    + errorMsg;
                   errorSubMsg = "These permissions are required for this feature to work. Further details are in the documentation links provided in the last page of the editing panel within this web part.";
                   
                   //Check if permissions error message should be displayed
@@ -320,15 +319,15 @@ export default class AsyncDropdown extends React.Component<IDirectoryPickerProps
             this.props.onChange(items);
 
           //Check for enough Graph permissions to query calendar & events
-          if (items.length > 0) {
-            if (items[0].personaType === "user") {
-              const graphScopes = this.props.getGraphScopes();
+          if (items.length > 0 && items[0].personaType === "user") {
+            const graphScopes = this.props.getGraphScopes();
+            //Make sure scopes are actually available
+            if (graphScopes !== null && graphScopes.length > 0) {
               const correctScopes = graphScopes.filter((value:string) => value.indexOf("Calendars.Read") === 0 && value.indexOf("Calendars.ReadBasic") !== 0);
               if (correctScopes && correctScopes.length === 0) {
                 //Show error dialog (after short delay)
                 setTimeout(() => {
                   const errorMsg = "Your SharePoint tenant-level admins have not approved the <strong>calendar</strong> permission needed to query user (and shared mailbox) <em>Outlook calendars</em> and their <em>event data</em>.";
-                    //+ "The currently approved Graph API scopes include: " + (graphScopes.length > 0 ? graphScopes.join(", ") : "None");
                   
                   //Show error dialog
                   this.setState({
