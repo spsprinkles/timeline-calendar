@@ -3,7 +3,7 @@
   "solution": {
     "name": "Timeline Calendar",
     "id": "fdcba3a4-d4a6-4ac7-a370-98c7d5d8e7db",
-    "version": "0.6.3.2",
+    "version": "0.6.4.0",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,

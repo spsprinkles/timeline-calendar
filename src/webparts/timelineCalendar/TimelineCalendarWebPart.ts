@@ -17,7 +17,6 @@ import { PropertyFieldNumber } from '@pnp/spfx-property-controls/lib/PropertyFie
 //import { PropertyFieldMonacoEditor } from '@pnp/spfx-property-controls/lib/PropertyFieldMonacoEditor';
 import { PropertyFieldMonacoEditor } from './components/PropertyFieldMonacoEditor';
 import { PropertyPaneWebPartInformation } from '@pnp/spfx-property-controls/lib/PropertyPaneWebPartInformation';
-//import { PropertyPaneMarkdownContent } from '@pnp/spfx-property-controls/lib/PropertyPaneMarkdownContent';
 import { PropertyFieldMessage } from '@pnp/spfx-property-controls/lib/PropertyFieldMessage';
 import { MessageBarType } from 'office-ui-fabric-react/lib/MessageBar';
 import PnPTelemetry from "@pnp/telemetry-js";
@@ -116,15 +115,33 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     }*/
 
     //Get user's groups in case Outlook Calendars collection/pane is opened
-    if (this.displayMode === DisplayMode.Edit && window.location.hash !== "#noMemberOfList") { //for temp testing
-      this.getUserMemberOf();
+    if (this.displayMode === DisplayMode.Edit) {
+      //TODO: Check for Conditional Access policy block on token issuance (from SPO client token app)
+      //get: site/_api/Microsoft.SharePoint.InternalClientSideComponent.Token.AcquireOBOToken?resource=%27https://dod-graph.microsoft.us%27&clientId=%27b440e836-817c-4525-b67f-133106812f16%27
+      //header added "Obotoken": type of token
+      //header added "Resource": "https://dod-graph.microsoft.us"
+      //When conditional access policy error will be received
+      /*{"odata.error": {
+        "code": "-1, Microsoft.SharePoint.Client.ClientServiceException",
+        "message": {lang: en-US, "value": "Exception of type 'Microsoft.SharePoint.Client.ClientServiceException' was thrown."}
+      }}*/
+      //Different error when no CA policy error
+      //code: -1, Microsoft.SharePoint.Client.ResourceNotFoundException
+      //message: Cannot find resource for the request Microsoft.SharePoint.InternalClientSideComponent.Token.AcquireOBOToken.
+      //Or for now check if over Flow3
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("ignoreDownloadsCheck") || !this.context.pageContext.legacyPageContext.blockDownloadsExperienceEnabled) {
+        if (!params.has("noMemberOfList")) //for testing needs
+          this.getUserMemberOf();
 
-      //Also get access token for checking scopes
-      this.context.aadTokenProviderFactory.getTokenProvider().then(provider => {
-        provider.getToken(this.context.pageContext.legacyPageContext.msGraphEndpointUrl).then(value => {
-          this._accessToken = value;
-        });
-      });
+        //Also get access token for checking scopes
+        if (!params.has("noAadTokenCheck")) //for testing needs
+          this.context.aadTokenProviderFactory.getTokenProvider().then(provider => {
+            provider.getToken(this.context.pageContext.legacyPageContext.msGraphEndpointUrl).then(value => {
+              this._accessToken = value;
+            });
+          });
+      }
     }
 
     //If there's no existing data, add some default categories and groups to give the user a visual starting point/example
@@ -534,16 +551,6 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     const pageContext = this.context.pageContext;
     const spHttpClient = this.context.spHttpClient;
     const self = this;
-
-    //MarkDown for web part information (make sure to remove left indentation/spaces)
-    /*const webpartMD = `**Web Part Version**
-
-${this && this.manifest.version ? this.manifest.version : '*Unknown*'}
-
-**Web Part Instance ID**
-
-${this.instanceId}
-`;*/
 
     //Return the PropertyPane config
     return {
@@ -2516,8 +2523,8 @@ ${this.instanceId}
                   text: "Edit Timeline visualization properties"
                 }),
                 PropertyPaneWebPartInformation({ //was adding to the div: style="font-size:.9em;"
-                  description: `<div>Refer to the <a href="https://visjs.github.io/vis-timeline/docs/timeline/#Configuration_Options" target="_blank">Timeline configuration options</a> page for available options</div>`,
-                  key: 'visInstructions'
+                  key: 'visInstructions',
+                  description: `<div>Refer to the <a href="https://visjs.github.io/vis-timeline/docs/timeline/#Configuration_Options" target="_blank">Timeline configuration options</a> page for available options</div>`
                 }),
                 PropertyFieldMonacoEditor('visJsonProperties', {
                   key: 'visJsonProperties',
@@ -2540,8 +2547,8 @@ ${this.instanceId}
                   text: "Customize the hover-over tooltip"
                 }),
                 PropertyPaneWebPartInformation({
+                  key: 'ttInstructions',
                   description: `<div>Refer to the <a href="https://handlebarsjs.com/guide/#language-features" target="_blank">Handlebars Language Guide</a> page</div>`,
-                  key: 'ttInstructions'
                 }),
                 PropertyFieldMonacoEditor('tooltipEditor', {
                   key: 'tooltipEditor',
@@ -2610,10 +2617,6 @@ ${this.instanceId}
                     text: "👉 SIPR Tips, Tools & Apps site"
                   }) : 
                   PropertyPaneHorizontalRule()),
-                // PropertyPaneMarkdownContent({
-                //   markdown: webpartMD,
-                //   key: "webpartInfo"
-                // }),
                 //NOTE: The manifest.version value comes from package.json (not package-solution.json)
                 PropertyPaneWebPartInformation({
                   description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Version</b></div>
