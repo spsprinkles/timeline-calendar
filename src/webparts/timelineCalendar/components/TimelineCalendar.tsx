@@ -508,7 +508,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   private getViewStartDate(): Date {
     //Initial start view; default 7 days before today
     const viewStart = new Date();
-    viewStart.setDate(viewStart.getDate() - (this.props.initialStartDays || 7));
+    viewStart.setDate(viewStart.getDate() - (this.props.initialStartDays != null ? this.props.initialStartDays : 7)); //fix for 0 value
     return viewStart;
   }
   private getViewEndDate(): Date {
@@ -522,7 +522,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   private getMinDate(): Date {
     //Build dates for min/max data querying; default 2 months before today
     const minDate = new Date();
-    minDate.setDate(minDate.getDate() - (this.props.minDays || 60));
+    minDate.setDate(minDate.getDate() - (this.props.minDays != null ? this.props.minDays : 60)); //fix for 0 value
     return minDate;
   }
 
@@ -1313,6 +1313,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       styleHtml += `
   /* Force full width of page, and for workbench environment too */
   #SPPageChrome section.mainContent div.SPCanvas div.CanvasZone[data-automation-id="CanvasZone"] > div:first-child,
+  #SPPageChrome section.mainContent div.SPCanvas div.CanvasZone[data-automation-id="CanvasZone"] > div:first-child div[data-automation-id="CollapsibleLayer-Content"],
   #workbenchPageContent div.CanvasComponent div.Canvas > div.CanvasZoneContainer > div.CanvasZone:first-child {
     max-width:unset;
   }
@@ -1523,6 +1524,9 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
           SPHttpClient.configurations.v1)
           .then((response: SPHttpClientResponse) => response.json())
           .then((data:any) => {
+            if (data == null || data.value == null) //user may have no access to this list
+              return;
+
             data.value.forEach((view:any) => {
               if (list.view.toLowerCase() === view.Title.toLowerCase() || list.view.toLowerCase().indexOf(view.Id) !== -1) {
 								//TC.log("Got ViewQuery for '" + view.Title + "' view");
@@ -2540,6 +2544,9 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   }
 
   private async queryCalendar(calObj:ICalendarItem, calConfigs:ICalendarConfigs, existingEvent:any, skipNumber:number, startDate?:string, endDate?:string): Promise<void> {
+    //First check for Flow3 to prevent full page redirection due to Conditional Access policy block on token issuance
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("ignoreDownloadsCheck") || !this.props.context.pageContext.legacyPageContext.blockDownloadsExperienceEnabled)
     //First Promise return but later return again from the Graph call
     return await this.props.graphClient.then((client:MSGraphClientV3): void => {
       const appendValidGraphEventProp = (name:string): string => {
@@ -2749,7 +2756,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             }
             //Check if another date range should be queried
             else if (new Date(endDate) < this.getMaxDate()) {
-              let tempDate = new Date(endDate);
+              const tempDate = new Date(endDate);
               tempDate.setMilliseconds(tempDate.getMilliseconds() + 1);
               startDate = tempDate.toISOString();
               tempDate.setFullYear(tempDate.getFullYear() + 3); //add 3 years
@@ -2767,5 +2774,11 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         //Also needed so that Promise.all correctly resolves
       });
     }); //end Graph client
+    else {
+      return await new Promise<void>((reject) => { //resolve, reject
+        //console.log("Flow 3 found, not calling for Outlook calendar")
+        reject();
+      });
+    }
   } //end queryCalendar()
 }

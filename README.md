@@ -2,7 +2,7 @@
 
 ## Summary
 
-![SPFx 1.17](https://img.shields.io/badge/SPFx-1.17.2-green.svg)
+![SPFx 1.17.2](https://img.shields.io/badge/SPFx-1.17.2-green.svg)
 ![Node.js v16](https://img.shields.io/badge/Node.js-v16-green.svg)
 ![SPO](https://img.shields.io/badge/SharePoint%20Online-Compatible-green.svg)
 
@@ -27,6 +27,7 @@ Refer to the [releases page](https://github.com/spsprinkles/timeline-calendar/re
 
 | Version | Date              | Comments        |
 | ------- | ----------------- | --------------- |
+| 0.6.4   | January 17, 2025  | Graph & advanced editor updates + visual improvements |
 | 0.6.3   | August 28, 2024   | Bug fixes for event querying |
 | 0.6.2   | May 3, 2024       | Enabled advanced code editor for DoD365-Sec |
 | 0.6.1   | March 18, 2024    | Several enhancements & bug fixes |
