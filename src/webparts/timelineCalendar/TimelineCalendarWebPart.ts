@@ -18,6 +18,7 @@ import { PropertyFieldNumber } from '@pnp/spfx-property-controls/lib/PropertyFie
 import { PropertyFieldMonacoEditor } from './components/PropertyFieldMonacoEditor';
 import { PropertyPaneWebPartInformation } from '@pnp/spfx-property-controls/lib/PropertyPaneWebPartInformation';
 import { PropertyFieldMessage } from '@pnp/spfx-property-controls/lib/PropertyFieldMessage';
+import { PropertyPanePropertyEditor } from '@pnp/spfx-property-controls/lib/PropertyPanePropertyEditor';
 import { MessageBarType } from 'office-ui-fabric-react/lib/MessageBar';
 import PnPTelemetry from "@pnp/telemetry-js";
 import MonacoPanelEditor from './components/MonacoPanelEditor';
@@ -52,6 +53,7 @@ export interface ITimelineCalendarWebPartProps {
   tooltipEditor: string;
   visJsonProperties: string;
   cssOverrides: string;
+  toggleInfoHeaderValue: boolean; //with PropertyPanePropertyEditor
 }
 
 export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITimelineCalendarWebPartProps> {
@@ -2597,26 +2599,25 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
                 PropertyPaneWebPartInformation({
                   //No margin-top style needed
                   description: `<div style="margin-bottom:5px"><b>Reference & Support</b></div>
-                    <div style="margin-bottom:5px">Use the following links to access documentation and support as well as to report any issues or to submit an idea for a new feature.</div>`,
+                    <div style="margin-bottom:5px">Access documentation & support, report issues, or submit an idea for a new feature:</div>`,
                   key: 'supportInfo'
                 }),
                 PropertyPaneLink('',{
-                  target: '_blank',
-                  href: "https://www.milsuite.mil/book/groups/m365-support/projects/timeline-calendar/",
-                  text: "milBook Group/Project (DoD CAC-login)"
-                }),
-                PropertyPaneLink('',{
-                  target: '_blank',
-                  href: "https://github.com/spsprinkles/timeline-calendar/",
-                  text: "GitHub Repository (public access)"
+                    target: '_blank',
+                    href: "https://github.com/spsprinkles/timeline-calendar/wiki",
+                    text: "GitHub Wiki/Repository"
                 }),
                 (pageContext.legacyPageContext.aadInstanceUrl && pageContext.legacyPageContext.aadInstanceUrl.endsWith("microsoft.scloud") ? 
                   PropertyPaneLink('',{
                     target: '_blank',
-                    href: "https://dod365sec.spo.microsoft.scloud/sites/USAF-TipsToolsApps/",
-                    text: "👉 SIPR Tips, Tools & Apps site"
+                    href: "https://dod365sec.spo.microsoft.scloud/sites/USAF-TipsToolsApps/SitePages/TimelineCalendar.aspx",
+                    text: "SIPR Tips, Tools & Apps site"
                   }) : 
                   PropertyPaneHorizontalRule()),
+                PropertyPanePropertyEditor({ //with toggleInfoHeaderValue
+                  webpart: this,
+                  key: 'propertyEditor'
+                }),
                 //NOTE: The manifest.version value comes from package.json (not package-solution.json)
                 PropertyPaneWebPartInformation({
                   description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Version</b></div>
@@ -2627,7 +2628,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
                 }),
                 PropertyPaneWebPartInformation({
                   description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Author</b></div>
-                    <div>Michael Vasiloff <a href="https://www.linkedin.com/in/michaelvasiloff" target="_blank">[LinkedIn]</a> <a href="https://github.com/mikevasiloff" target="_blank">[GitHub]</a> <a href="https://www.milsuite.mil/book/people/michael.d.vasiloff" target="_blank">[milBook]</a></div>`,
+                    <div>Michael Vasiloff <a href="https://www.linkedin.com/in/michaelvasiloff" target="_blank">[LinkedIn]</a> <a href="https://github.com/mikevasiloff" target="_blank">[GitHub]</a></div>`,
                   key: 'authors'
                 }),
                 PropertyPaneWebPartInformation({
