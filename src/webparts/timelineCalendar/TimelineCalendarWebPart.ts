@@ -18,7 +18,7 @@ import { PropertyFieldNumber } from '@pnp/spfx-property-controls/lib/PropertyFie
 import { PropertyFieldMonacoEditor } from './components/PropertyFieldMonacoEditor';
 import { PropertyPaneWebPartInformation } from '@pnp/spfx-property-controls/lib/PropertyPaneWebPartInformation';
 import { PropertyFieldMessage } from '@pnp/spfx-property-controls/lib/PropertyFieldMessage';
-import { PropertyPanePropertyEditor } from '@pnp/spfx-property-controls/lib/PropertyPanePropertyEditor';
+//import { PropertyPanePropertyEditor } from '@pnp/spfx-property-controls/lib/PropertyPanePropertyEditor';
 import { MessageBarType } from 'office-ui-fabric-react/lib/MessageBar';
 import PnPTelemetry from "@pnp/telemetry-js";
 import MonacoPanelEditor from './components/MonacoPanelEditor';
@@ -53,7 +53,7 @@ export interface ITimelineCalendarWebPartProps {
   tooltipEditor: string;
   visJsonProperties: string;
   cssOverrides: string;
-  toggleInfoHeaderValue: boolean; //with PropertyPanePropertyEditor
+  //toggleInfoHeaderValue: boolean; //with PropertyPanePropertyEditor
 }
 
 export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITimelineCalendarWebPartProps> {
@@ -555,7 +555,8 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
     const self = this;
 
     //Return the PropertyPane config
-    return {
+    //return {
+    let propConfig = {
       pages: [
         {
           /*header: {
@@ -2596,51 +2597,65 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
             {
               groupName: "About",
               groupFields: [
-                PropertyPaneWebPartInformation({
-                  //No margin-top style needed
-                  description: `<div style="margin-bottom:5px"><b>Reference & Support</b></div>
-                    <div style="margin-bottom:5px">Access documentation & support, report issues, or submit an idea for a new feature:</div>`,
-                  key: 'supportInfo'
-                }),
-                PropertyPaneLink('',{
-                    target: '_blank',
-                    href: "https://github.com/spsprinkles/timeline-calendar/wiki",
-                    text: "GitHub Wiki/Repository"
-                }),
-                (pageContext.legacyPageContext.aadInstanceUrl && pageContext.legacyPageContext.aadInstanceUrl.endsWith("microsoft.scloud") ? 
-                  PropertyPaneLink('',{
-                    target: '_blank',
-                    href: "https://dod365sec.spo.microsoft.scloud/sites/USAF-TipsToolsApps/SitePages/TimelineCalendar.aspx",
-                    text: "SIPR Tips, Tools & Apps site"
-                  }) : 
-                  PropertyPaneHorizontalRule()),
-                PropertyPanePropertyEditor({ //with toggleInfoHeaderValue
-                  webpart: this,
-                  key: 'propertyEditor'
-                }),
-                //NOTE: The manifest.version value comes from package.json (not package-solution.json)
-                PropertyPaneWebPartInformation({
-                  description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Version</b></div>
-                    <div>${this && this.manifest.version ? this.manifest.version : '*Unknown*'}</div>
-                    <div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Instance ID</b></div>
-                    <div>${this.instanceId}</div>`,
-                  key: 'wpInfo'
-                }),
-                PropertyPaneWebPartInformation({
-                  description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Author</b></div>
-                    <div>Michael Vasiloff <a href="https://www.linkedin.com/in/michaelvasiloff" target="_blank">[LinkedIn]</a> <a href="https://github.com/mikevasiloff" target="_blank">[GitHub]</a></div>`,
-                  key: 'authors'
-                }),
-                PropertyPaneWebPartInformation({
-                  description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Graph API Scopes (Tenant Approved)</b></div>
-                    <div>${this.getGraphScopes(true).join(", ")}</div>`,
-                  key: 'graphScopes'
-                })
+                //Filled in below
               ]
             }
           ]
         }
       ]
     };
+
+    const addItems = [
+      PropertyPaneWebPartInformation({
+        //No margin-top style needed
+        description: `<div style="margin-bottom:5px"><b>Reference & Support</b></div>
+          <div style="margin-bottom:5px">Access documentation & support, report issues, or submit an idea for a new feature:</div>`,
+        key: 'supportInfo'
+      }),
+      PropertyPaneLink('',{
+          target: '_blank',
+          href: "https://github.com/spsprinkles/timeline-calendar/wiki",
+          text: "GitHub Wiki/Repository"
+      })];
+
+    if (pageContext.legacyPageContext.cloudType === "dod") addItems.push(
+        PropertyPaneLink('',{
+          target: '_blank',
+          href: "https://web.git.mil/dod-m365-community/articles#timeline-calendar",
+          text: "DoD GitLab (web.git.mil)"
+        }));
+    
+    if (pageContext.legacyPageContext.aadInstanceUrl && 
+        pageContext.legacyPageContext.aadInstanceUrl.endsWith("microsoft.scloud")) addItems.push(
+      PropertyPaneLink('',{
+        target: '_blank',
+        href: "https://dod365sec.spo.microsoft.scloud/sites/USAF-TipsToolsApps/SitePages/TimelineCalendar.aspx",
+        text: "SIPR Tips, Tools & Apps site"
+      }));
+
+    //PropertyPaneHorizontalRule()),
+    addItems.push(
+      //NOTE: The manifest.version value comes from package.json (not package-solution.json)
+      PropertyPaneWebPartInformation({
+        description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Version</b></div>
+          <div>${this && this.manifest.version ? this.manifest.version : '*Unknown*'}</div>
+          <div style="margin-top:20px;margin-bottom:5px;"><b>Web Part Instance ID</b></div>
+          <div>${this.instanceId}</div>`,
+        key: 'wpInfo'
+      }),
+      PropertyPaneWebPartInformation({
+        description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Author</b></div>
+          <div>Michael Vasiloff <a href="https://www.linkedin.com/in/michaelvasiloff" target="_blank">[LinkedIn]</a> <a href="https://github.com/mikevasiloff" target="_blank">[GitHub]</a></div>`,
+        key: 'authors'
+      }),
+      PropertyPaneWebPartInformation({
+        description: `<div style="margin-top:20px;margin-bottom:5px;"><b>Graph API Scopes (Tenant Approved)</b></div>
+          <div>${this.getGraphScopes(true).join(", ")}</div>`,
+        key: 'graphScopes'
+      })
+    );
+
+    propConfig.pages[2].groups[0].groupFields = addItems;
+    return propConfig;
   }
 }
