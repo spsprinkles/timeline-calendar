@@ -45,12 +45,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   private _timeline: Timeline;
   private _dsItems: any;
   private _dsGroups: any;
+  private _isLoadingEvents: boolean = false;
 
   /**
    * Called when component is mounted (only on the *initial* loading of the web part)
    */
   public async componentDidMount(): Promise<void> {
     //const { data, calendars } = this.props;
+    this._isLoadingEvents = false; //Ensure flag is reset on mount
     this.initialBuildTimeline();
 
     //Add a helper for when user mistypes a helper name so that an exception is not thrown
@@ -496,6 +498,15 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       const v = a.order;
       a.order = b.order;
       b.order = v;
+    },
+    order: function (a:any, b:any) {
+      // Sort items vertically within groups by title (content field)
+      // Items with no content will be sorted to the bottom
+      const aContent = (a.content || "").toLowerCase();
+      const bContent = (b.content || "").toLowerCase();
+      if (aContent < bContent) return -1;
+      if (aContent > bContent) return 1;
+      return 0;
     }
     /*,
     groupTemplate: function (group, element) {
@@ -1468,6 +1479,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   }
 
   private renderEvents(): void {
+    //Prevent concurrent event loading to avoid duplicates
+    if (this._isLoadingEvents) {
+      console.log("TimelineCalendar: Skipping renderEvents() - already loading");
+      return;
+    }
+    console.log("TimelineCalendar: Starting renderEvents()");
+    this._isLoadingEvents = true;
+
     //Function: showLegend (must be delared before/above where it's called)
     const showLegend = ():void => {
       //Hide the loader image
@@ -1504,6 +1523,13 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 
     //When both are finished
     Promise.all([spPromise, outlookPromise]).then(response => {
+      console.log("TimelineCalendar: Events loaded successfully");
+      showLegend();
+      this._isLoadingEvents = false;
+    }).catch(error => {
+      //Ensure flag is cleared even on error
+      console.error("TimelineCalendar: Error loading events:", error);
+      this._isLoadingEvents = false;
       showLegend();
     });
   }
