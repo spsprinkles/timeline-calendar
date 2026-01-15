@@ -2418,15 +2418,18 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //let numOfValidItems = 0;
       let lastStartDate:Date = null;
       const fieldKeys = this.getFieldKeys();
-      
+
       let pagingDetails:string = null;
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(strXml, "application/xml");
+      console.log("TimelineCalendar: Processing XML response for list:", list.list);
       xmlDoc.querySelectorAll("*").forEach(elem => {
-        if (elem.nodeName === "rs:data")
+        if (elem.nodeName === "rs:data") {
           //Store this for use after the forEach
           pagingDetails = elem.getAttribute("ListItemCollectionPositionNext"); //ItemCount is another
-        
+          const itemCount = elem.getAttribute("ItemCount");
+          console.log("TimelineCalendar: Found rs:data with ItemCount:", itemCount);
+        }
         //Loop over the event/data results
         else if(elem.nodeName === "z:row") { //actual data is here
           const itemDateInfo = this.getSPItemDates(list, listConfigs, elem);
@@ -2513,8 +2516,10 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             } //A groupField was selected && there are this.props.groups
 
             //Add event/item to the DataSet
-            if (multipleValuesFound === false)
+            if (multipleValuesFound === false) {
+              console.log("TimelineCalendar: Adding event to DataSet:", oEvent.content);
               this._dsItems.add(oEvent);
+            }
           }
         }
       }); //end SOAP response forEach
