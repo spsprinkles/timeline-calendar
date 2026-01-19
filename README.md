@@ -1,6 +1,6 @@
 # Timeline Calendar
 
-## Summary
+## ℹ️ Summary
 
 ![SPFx 1.17.2](https://img.shields.io/badge/SPFx-1.17.2-green.svg)
 ![Node.js v16](https://img.shields.io/badge/Node.js-v16-green.svg)
@@ -10,7 +10,11 @@ The Timeline Calendar web part can pull in data from multiple sources and render
 
 ![Timeline Calendar web part](https://github.com/spsprinkles/timeline-calendar/assets/8918397/27d7632c-170e-443e-8b69-7d16fa6c3184)
 
-## Graph API Permissions
+## 📖 User Guide
+
+Access the [**user/setup guide**](https://github.com/spsprinkles/timeline-calendar/wiki) for information on the specific options/properties available for customization. This includes details on both basic and advanced uses of the web part.
+
+## 🔑 Graph API Permissions
 
 As of version 0.6.0, the following [**delegated**](https://learn.microsoft.com/en-us/graph/permissions-overview#delegated-permissions) Graph API permissions/scopes are requested by the application. Failure to approve these permissions in the SPO Admin Center (or Azure Portal) will result in degraded functionality as specified below.
 
@@ -21,7 +25,7 @@ As of version 0.6.0, the following [**delegated**](https://learn.microsoft.com/e
 | Group.Read.All | [/groups](https://learn.microsoft.com/en-us/graph/api/group-list) | Search the directory for M365 Groups (for the "people picker") and get group calendar events that the _current_ user has access to |
 | Calendars.Read.Shared | [/users/${userId}/calendars](https://learn.microsoft.com/en-us/graph/api/user-list-calendars) | Query user's calendars that have been shared with the _current_ user |
 
-## Version history
+## 📈 Version history
 
 Refer to the [releases page](https://github.com/spsprinkles/timeline-calendar/releases) for specific details.
 
@@ -35,6 +39,6 @@ Refer to the [releases page](https://github.com/spsprinkles/timeline-calendar/re
 | 0.5.3   | November 27, 2023 | Several bug fixes |
 | 0.5.2   | October 20, 2023  | Initial release |
 
-## Disclaimer
+## ⚠️ Disclaimer
 
 **THIS CODE IS PROVIDED _AS IS_ WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.**
