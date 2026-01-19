@@ -45,12 +45,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   private _timeline: Timeline;
   private _dsItems: any;
   private _dsGroups: any;
+  private _isLoadingEvents: boolean = false;
 
   /**
    * Called when component is mounted (only on the *initial* loading of the web part)
    */
   public async componentDidMount(): Promise<void> {
     //const { data, calendars } = this.props;
+    this._isLoadingEvents = false; //Ensure flag is reset on mount
     this.initialBuildTimeline();
 
     //Add a helper for when user mistypes a helper name so that an exception is not thrown
@@ -497,6 +499,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       a.order = b.order;
       b.order = v;
     }
+    //order prop not used due to performance issues with large datasets
     /*,
     groupTemplate: function (group, element) {
         if (!group) { return }
@@ -1468,6 +1471,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
   }
 
   private renderEvents(): void {
+    //Prevent concurrent event loading to avoid duplicates
+    if (this._isLoadingEvents) {
+      console.log("TimelineCalendar: Skipping renderEvents() - already loading");
+      return;
+    }
+    console.log("TimelineCalendar: Starting renderEvents()");
+    this._isLoadingEvents = true;
+
     //Function: showLegend (must be delared before/above where it's called)
     const showLegend = ():void => {
       //Hide the loader image
@@ -1504,6 +1515,13 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 
     //When both are finished
     Promise.all([spPromise, outlookPromise]).then(response => {
+      console.log("TimelineCalendar: Events loaded successfully");
+      showLegend();
+      this._isLoadingEvents = false;
+    }).catch(error => {
+      //Ensure flag is cleared even on error
+      console.error("TimelineCalendar: Error loading events:", error);
+      this._isLoadingEvents = false;
       showLegend();
     });
   }
@@ -2392,15 +2410,18 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       //let numOfValidItems = 0;
       let lastStartDate:Date = null;
       const fieldKeys = this.getFieldKeys();
-      
+
       let pagingDetails:string = null;
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(strXml, "application/xml");
+      console.log("TimelineCalendar: Processing XML response for list:", list.list);
       xmlDoc.querySelectorAll("*").forEach(elem => {
-        if (elem.nodeName === "rs:data")
+        if (elem.nodeName === "rs:data") {
           //Store this for use after the forEach
           pagingDetails = elem.getAttribute("ListItemCollectionPositionNext"); //ItemCount is another
-        
+          const itemCount = elem.getAttribute("ItemCount");
+          console.log("TimelineCalendar: Found rs:data with ItemCount:", itemCount);
+        }
         //Loop over the event/data results
         else if(elem.nodeName === "z:row") { //actual data is here
           const itemDateInfo = this.getSPItemDates(list, listConfigs, elem);
