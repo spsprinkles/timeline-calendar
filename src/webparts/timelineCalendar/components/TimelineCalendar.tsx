@@ -498,16 +498,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       const v = a.order;
       a.order = b.order;
       b.order = v;
-    },
-    order: function (a:any, b:any) {
-      // Sort items vertically within groups by title (content field)
-      // Items with no content will be sorted to the bottom
-      const aContent = (a.content || "").toLowerCase();
-      const bContent = (b.content || "").toLowerCase();
-      if (aContent < bContent) return -1;
-      if (aContent > bContent) return 1;
-      return 0;
     }
+    //order prop not used due to performance issues with large datasets
     /*,
     groupTemplate: function (group, element) {
         if (!group) { return }
@@ -2516,10 +2508,8 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
             } //A groupField was selected && there are this.props.groups
 
             //Add event/item to the DataSet
-            if (multipleValuesFound === false) {
-              console.log("TimelineCalendar: Adding event to DataSet:", oEvent.content);
+            if (multipleValuesFound === false)
               this._dsItems.add(oEvent);
-            }
           }
         }
       }); //end SOAP response forEach

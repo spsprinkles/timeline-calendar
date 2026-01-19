@@ -1,6 +1,6 @@
 {
   "name": "timelinecalendar",
-  "version": "0.6.4.1",
+  "version": "0.6.4.2",
   "private": true,
   "engines": {
     "node": ">=16.13.0 <17.0.0"
