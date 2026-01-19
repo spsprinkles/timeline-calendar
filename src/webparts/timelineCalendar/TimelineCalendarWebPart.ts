@@ -1,7 +1,7 @@
 import * as React from 'react';
 import * as ReactDom from 'react-dom';
 import { DisplayMode, Version } from '@microsoft/sp-core-library';
-import { IPropertyPaneConfiguration, PropertyPaneTextField, PropertyPaneLabel, PropertyPaneToggle, PropertyPaneLink, PropertyPaneHorizontalRule } 
+import { IPropertyPaneConfiguration, PropertyPaneTextField, PropertyPaneLabel, PropertyPaneToggle, PropertyPaneLink } 
   from '@microsoft/sp-property-pane';
 import { BaseClientSideWebPart } from '@microsoft/sp-webpart-base';
 import { IReadonlyTheme } from '@microsoft/sp-component-base';
@@ -2633,7 +2633,7 @@ export default class TimelineCalendarWebPart extends BaseClientSideWebPart<ITime
         text: "SIPR Tips, Tools & Apps site"
       }));
 
-    //PropertyPaneHorizontalRule()),
+    //was previously using PropertyPaneHorizontalRule()),
     addItems.push(
       //NOTE: The manifest.version value comes from package.json (not package-solution.json)
       PropertyPaneWebPartInformation({
