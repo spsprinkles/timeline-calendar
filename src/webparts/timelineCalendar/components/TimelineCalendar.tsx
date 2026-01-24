@@ -1234,6 +1234,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
     this.renderEvents();
   }
 
+  /*Note that loadStyles doesn't automatically remove the styles when navigating off the page:
+      import { loadStyles } from '@microsoft/load-themed-styles';
+    Instead, using the below method enables removal of the styles in the onDispose method of the .ts file.
+    
+    Warning: This method can load the styles *before* the other imported css files.
+    As such the below CSS needs to have higher specificity so it override those other 
+    css files even if they are loaded after the below TimelineDynStyles.
+  */
   private renderDynamicStyles(): void {
     const styleId = "TimelineDynStyles-" + this.props.instanceId.substring(24); //use last portion of GUID
     let styleElem = document.getElementById(styleId);
@@ -1243,7 +1251,7 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
       styleElem = document.createElement("style");
       //styleElem.type = 'text/css';
       styleElem.id = styleId;
-      //SPFx default styles have attr: data-load-themed-styles="true"
+      //SPFx default styles (and those loaded with loadStyles) have attr: data-load-themed-styles="true"
 
       //was setting inner here
       head.appendChild(styleElem);
@@ -1269,7 +1277,9 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         let divStyles = this.props.buildDivStyles(categoryItem);
         if (this.props.hideItemBoxBorder && divStyles.indexOf("background-color") === -1) //set bg to border color, mostly only applicable for vertical Holidays
           divStyles += "background-color:" + categoryItem.borderColor + ";";
-        styleHtml += '.vis-item.' + this.props.ensureValidClassName(categoryItem.name) + ' {' + divStyles + '}\r\n';
+        
+        //Needed to add container for more specificity
+        styleHtml += `.container-${this.props.instanceId} .vis-item.${this.props.ensureValidClassName(categoryItem.name)} {${divStyles}}\r\n`;
 
         //Old way below when "advancedStyles" were JSON based
         //-----------------------------------
@@ -1284,43 +1294,53 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
         // }
         // styleHtml += '.vis-item.' + this.ensureValidClassName(categoryItem.name) + ' {' + newElem.style.cssText + '}\r\n';
       });
+
+    //Needed to add container for more specificity
+    styleHtml += `
+/* Need to override for point items due to use of container overriding vis.js defaults */
+.container-${this.props.instanceId} .vis-timeline .vis-item.vis-point {
+    background-color: transparent;
+    color: inherit;
+}
+
+`
     }
 
     if (this.props.hideItemBoxBorder)
-    styleHtml += `
-  /* Use a thin line instead of a colored box for all multi-day events */
-  /* .vis-timeline ----------------------------------------------------------------- */
-  .vis-item.vis-range, .vis-item.legendBox {
-      background-color: transparent;
-      border-style: none none solid none;
-      border-bottom-width: 7px;
-      border-radius: 0px;
-  }
-  .vis-item.vis-range .vis-item-content {
-      padding:0px;
-  }
-  /* ----------------------------------------------------------------- */
+      styleHtml += `
+/* Use a thin line instead of a colored box for all multi-day events */
+/* .vis-timeline ----------------------------------------------------------------- */
+.container-${this.props.instanceId} .vis-item.vis-range, .vis-item.legendBox {
+    background-color: transparent;
+    border-style: none none solid none;
+    border-bottom-width: 7px;
+    border-radius: 0px;
+}
+.container-${this.props.instanceId} .vis-item.vis-range .vis-item-content {
+    padding:0px;
+}
+/* ----------------------------------------------------------------- */
 
 `;
 
-  if (this.props.overflowTextVisible)
-  styleHtml += `
-  /* If you want the full text of multi-day events to display even if it goes outside of their box, use this CSS below */
-  .vis-item.vis-range .vis-item-overflow {
-      overflow: visible;
-  }
+    if (this.props.overflowTextVisible)
+      styleHtml += `
+/* If you want the full text of multi-day events to display even if it goes outside of their box, use this CSS below */
+.container-${this.props.instanceId} .vis-item.vis-range .vis-item-overflow {
+    overflow: visible;
+}
 
 `;
 
     if (this.props.fillFullWidth)
       styleHtml += `
-  /* Force full width of page, and for workbench environment too */
-  #SPPageChrome section.mainContent div.SPCanvas div.CanvasZone[data-automation-id="CanvasZone"] > div:first-child,
-  #SPPageChrome section.mainContent div.SPCanvas div.CanvasZone[data-automation-id="CanvasZone"] > div:first-child div[data-automation-id="CollapsibleLayer-Content"],
-  #workbenchPageContent div.CanvasComponent div.Canvas > div.CanvasZoneContainer > div.CanvasZone:first-child {
-    max-width:unset;
-  }
-  `;
+/* Force full width of page, and for workbench environment too */
+#SPPageChrome section.mainContent div.SPCanvas div.CanvasZone[data-automation-id="CanvasZone"] > div:first-child,
+#SPPageChrome section.mainContent div.SPCanvas div.CanvasZone[data-automation-id="CanvasZone"] > div:first-child div[data-automation-id="CollapsibleLayer-Content"],
+#workbenchPageContent div.CanvasComponent div.Canvas > div.CanvasZoneContainer > div.CanvasZone:first-child {
+  max-width:unset;
+}
+`;
 
   //   if (this.props.hideSocialBar)
   //     styleHtml += `
