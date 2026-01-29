@@ -25,12 +25,34 @@ As of version 0.6.0, the following [**delegated**](https://learn.microsoft.com/e
 | Group.Read.All | [/groups](https://learn.microsoft.com/en-us/graph/api/group-list) | Search the directory for M365 Groups (for the "people picker") and get group calendar events that the _current_ user has access to |
 | Calendars.Read.Shared | [/users/${userId}/calendars](https://learn.microsoft.com/en-us/graph/api/user-list-calendars) | Query user's calendars that have been shared with the _current_ user |
 
+## 📃 Content Security Policy (CSP)
+
+Loading external scripts (such as from CDNs) within SharePoint Online is [subject to CSP enforcement](https://learn.microsoft.com/en-us/sharepoint/dev/spfx/content-securty-policy-trusted-script-sources). The Timeline Calendar uses the Microsoft developed [Monaco Editor](https://github.com/microsoft/monaco-editor) for JSON & other configuration editing. It attempts to load the editor from the following CDN locations in the following order (except for USSec environment which is handled differently):
+
+1. https://cdnjs.cloudflare.com/
+
+2. https://cdn.jsdelivr.net/
+
+SharePoint tenant administrators will need to follow the [Managing the Content Security Policy rules in SharePoint Online](https://learn.microsoft.com/en-us/sharepoint/dev/spfx/content-securty-policy-trusted-script-sources#managing-the-content-security-policy-rules-in-sharepoint-online) section of the CSP article for guidance on adding one (or both) of the above locations (with the trailing `/` character) in the "Trusted script sources" area of the admin portal.
+
+If the above locations are too "broad" for your tastes, you can scope them further to just the Monaco Editor path as shown below. Note that if you are adding the jsDelivr location, you must include the specific version as shown below. Again, it is important that you include the trailing `/` character:
+
+1. https<nolink></nolink>://cdnjs.cloudflare.com/ajax/libs/monaco-editor/
+
+2. https<nolink></nolink>://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/
+
+> [!NOTE]
+> The above are *not* addresses that you can open in a browser, but are rather the address of the base container/folder of the script files that get loaded.
+
+If no location is added to the "Trusted script sources" area, the Monaco Editor will fail to load and a simple textarea editor (which lacks syntax highlighting) will be shown to users as a fallback (as of version 0.6.5).
+
 ## 📈 Version history
 
 Refer to the [releases page](https://github.com/spsprinkles/timeline-calendar/releases) for specific details.
 
 | Version | Date              | Comments        |
 | ------- | ----------------- | --------------- |
+| 0.6.5   | January 29, 2026  | Bug fixes for event duplication & box rendering and CSP fallback |
 | 0.6.4   | January 17, 2025  | Graph & advanced editor updates + visual improvements |
 | 0.6.3   | August 28, 2024   | Bug fixes for event querying |
 | 0.6.2   | May 3, 2024       | Enabled advanced code editor for DoD365-Sec |

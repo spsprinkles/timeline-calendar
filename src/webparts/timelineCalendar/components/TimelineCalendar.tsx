@@ -566,12 +566,14 @@ export default class TimelineCalendar extends React.Component<ITimelineCalendarP
 
     //Incorporate any user provided overrides
     //let options = this.options;
-    try {
-      const userOptions = JSON.parse(this.props.visJsonProperties); //just in case
-      this.options = this.extend(true, this.options, userOptions); //userOptions override set "defaults" above
-    }
-    catch (e) {
-      console.error(e);
+    if (this.props.visJsonProperties) {
+      try {
+        const userOptions = JSON.parse(this.props.visJsonProperties); //just in case
+        this.options = this.extend(true, this.options, userOptions); //userOptions override set "defaults" above
+      }
+      catch (e) {
+        console.error(e);
+      }
     }
     
     //Generate the Timeline

@@ -91,8 +91,21 @@ export const MonacoEditor: React.FunctionComponent<IMonacoEditorProps> = (props:
       </Stack>
     );
   }
+
+  function onTextareaChange(e:any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+    //console.log(this); //undefined  
+    //console.log(e.target.value); //or e.nativeEvent.data
+      const validationErrors: string[] = [];
+      onValueChange(e.target.value, validationErrors);
+  }
   if (status === EStatus.ERROR) {
-    return <Error error={error} show={true} />;
+    return (
+      <>
+        <Error error={error} show={true} />
+        <div style={{"margin":"10px 0px"}}>Using a simple textarea editor as a fallback:</div>
+        <textarea onChange={onTextareaChange} spellCheck={false} autoComplete="off" autoCorrect="off" autoCapitalize="none" rows={30} cols={115} style={{"backgroundColor":"black", "color": "antiquewhite", "padding":"15px"}}>{value}</textarea>
+      </>
+    );
   }
   return (
     <>
